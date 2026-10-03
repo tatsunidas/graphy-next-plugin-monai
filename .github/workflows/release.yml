@@ -9,6 +9,8 @@ name: Release plugin
 on:
   push:
     tags: ["v*"]
+  # 手動実行は署名と検証までの dry-run（Release は作らない）。secrets の登録確認に使う。
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -36,7 +38,9 @@ jobs:
           id=$(jq -r .id plugin.json)
           pjver=$(jq -r .version plugin.json)
           ver="${GITHUB_REF_NAME#v}"
-          if [ "$pjver" != "$ver" ]; then
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            ver="$pjver"
+          elif [ "$pjver" != "$ver" ]; then
             echo "::error::plugin.json version ($pjver) != tag ($ver). 版とタグを一致させてください。"
             exit 1
           fi
@@ -79,6 +83,7 @@ jobs:
           ls -la dist
 
       - name: Create release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: |
