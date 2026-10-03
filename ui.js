@@ -1,7 +1,7 @@
 /// <reference path="./graphy-plugin.d.ts" />
 // @ts-check
 /*
- * MONAI Bundle を外部の計算機（Google Colab の GPU など）で動かす GRAPHY-Next の公式プラグイン（H59・H61〜H63）。
+ * MONAI Bundle を外部の計算機（Google Colab の GPU など）で動かす GRAPHY-Next の公式プラグイン（H59・H61・H64・H65）。
  * 設計: GRAPHY-Next の fw/remote-compute-design.md §16〜§18。
  *
  * 流れ（「実行」1 回・同意 1 回）:
@@ -574,7 +574,7 @@ export function mapSlices(g, shapeZyx, vol) {
 
 /**
  * 計算機から返ったラベル（npz の並び）を、`loadVolume` の並びの 1 本の volume に写す（同じ型のまま）。
- * 保存（H62）も表示（H63）もこの 1 本を渡す（ラベルごとに volume 大の配列を作らない）。
+ * 保存（H64）も表示（H65）もこの 1 本を渡す（ラベルごとに volume 大の配列を作らない）。
  * @param {Uint8Array | Uint16Array} labels [z, y, x]
  * @param {Int32Array} kMap  npz の k → 本体の k
  * @param {number} nxy  1 スライスの画素数
@@ -588,7 +588,7 @@ export function reorderLabels(labels, kMap, nxy) {
 }
 
 /**
- * ラベルの表（H62・H63 に渡す形）。名前は Bundle の channel_def、無ければ番号。
+ * ラベルの表（H64・H65 に渡す形）。名前は Bundle の channel_def、無ければ番号。
  * @param {number[]} values
  * @param {Map<number, string>} names
  * @param {string} description
@@ -763,7 +763,7 @@ export async function activate(host) {
     state.summary = summary;
     state.labels = { data: reorderLabels(/** @type {any} */ (npy.data), mapped.kMap, vol.dims[0] * vol.dims[1]), vol };
     showResult(summary);
-    // H63: 結果をそのまま ROI マネージャへ（表示だけ。保存は「SEG で保存」）
+    // H65: 結果をそのまま ROI マネージャへ（表示だけ。保存は「SEG で保存」）
     if (host.showLabelVolume) {
       const names = new Map((state.verdict?.labels ?? []).map((l) => [l.value, l.name]));
       const values = state.present.map((x) => x.value);
@@ -836,7 +836,7 @@ export async function activate(host) {
     const { data, vol } = state.labels;
     busy(true);
     const names = new Map((state.verdict?.labels ?? []).map((l) => [l.value, l.name]));
-    // H62: ラベルの volume 1 本と表を渡す（選ばなかったラベルは表に入れない＝背景になる）
+    // H64: ラベルの volume 1 本と表を渡す（選ばなかったラベルは表に入れない＝背景になる）
     const res = await host.saveSegmentation({
       reference: { studyUid: target.studyUid, seriesUid: target.seriesUid },
       grid: { dims: vol.dims, spacing: vol.spacing, ipp: vol.ipp, iop: vol.iop, sliceStep: vol.sliceStep },
