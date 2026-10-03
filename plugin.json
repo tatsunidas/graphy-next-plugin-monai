@@ -1,0 +1,13 @@
+{
+  "id": "vis-monai",
+  "name": "MONAI Bundle (remote GPU)",
+  "version": "0.1.0",
+  "engines": { "graphy": ">=0.4.0", "os": ["win32", "darwin", "linux"] },
+  "description": "Run a MONAI Bundle segmentation model (spleen, 104 organs, abdominal organs, pancreas, kidney, prostate, brain) on an external GPU such as Google Colab, show the labels in the ROI manager and save them as DICOM SEG. Research use only - not a diagnostic device.",
+  "author": "Visionary Imaging Services, Inc.",
+  "homepage": "https://github.com/tatsunidas/graphy-next-plugin-monai",
+  "license": "MIT",
+  "contributes": ["viewer2d.menu.analysis"],
+  "ui": "ui.js",
+  "permissions": ["remote-compute"]
+}

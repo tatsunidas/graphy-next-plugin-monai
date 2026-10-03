@@ -1,0 +1,9 @@
+{
+  "name": "graphy-next-plugin-monai",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "verify": "node --test"
+  }
+}
