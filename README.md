@@ -60,7 +60,7 @@ GRAPHY_TEST_PYTHON=/path/to/python [GRAPHY_TEST_PYTHONPATH=<nibabel の場所>] 
 
 ## リリース
 
-`plugin.json` の `version` を上げて `v<version>` のタグを push すると、GitHub Actions が zip・sha256・**公式鍵の署名**を作って Release に添付します。
+`plugin.json` の `version` を上げて `v<version>` のタグを push すると、GitHub Actions が zip・sha256・**公式鍵の署名**を作って**下書きの** Release に添付します。下書きの zip を現行の公開版の本体で確かめてから `gh release edit v<version> --draft=false` で公開します。
 署名の鍵（`secrets.MINISIGN_SECRET_KEY`、パスフレーズがあれば `MINISIGN_PASSWORD`）が無いとリリースは止まります（公式プラグインは署名なしで出しません）。
 
 ## ライセンス
