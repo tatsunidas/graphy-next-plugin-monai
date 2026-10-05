@@ -8,6 +8,7 @@
   "homepage": "https://github.com/tatsunidas/graphy-next-plugin-monai",
   "license": "MIT",
   "contributes": ["viewer2d.menu.analysis"],
+  "category": "ai",
   "ui": "ui.js",
   "permissions": ["remote-compute"]
 }
