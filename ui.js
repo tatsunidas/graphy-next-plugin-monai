@@ -15,21 +15,72 @@
  * 計算機の上のコード（PY）は、同意画面に全文が出る。Bundle の名前と上書きの設定だけが差し込まれる。
  */
 
+// 一覧は Model Zoo（Project-MONAI/model-zoo の models/model_info.json と各 Bundle の configs/）から
+// scripts/gen-catalog.mjs が生成する。手で書き換えない。プラグインの画面は ui.js しか配られないので、ここに埋め込む。
+// <catalog:begin>
+export const ZOO = {"fetched":"2026-10-20","source":"https://github.com/Project-MONAI/model-zoo (dev) models/model_info.json","entries":[{"name":"brain_image_synthesis_latent_diffusion_model","versions":["1.0.3","1.0.2","1.0.1"],"version":"1.0.4","ndf":{"inputs":{"image":{"type":"tabular","format":"nii","num_channels":1}},"outputs":{"pred":{"type":"image","format":"image","channel_def":{"0":"T1w"}}}},"displayable":null},{"name":"brats_mri_axial_slices_generative_diffusion","versions":["1.1.4","1.1.3","1.1.2","1.1.1","1.1.0","1.0.10","1.0.9","1.0.8","1.0.7","1.0.6","1.0.5","1.0.4","1.0.3","1.0.2","1.0.1","1.0.0"],"version":"1.1.5","ndf":{"inputs":{"latent":{"type":"noise","format":"image","num_channels":1}},"outputs":{"pred":{"type":"feature","format":"image","channel_def":{"0":"image"}}}},"displayable":null},{"name":"brats_mri_generative_diffusion","versions":["1.1.4","1.1.3","1.1.2","1.1.1","1.1.0","1.0.9","1.0.8","1.0.7","1.0.6","1.0.5","1.0.4","1.0.3","1.0.2","1.0.1","1.0.0"],"version":"1.1.5","ndf":{"inputs":{"latent":{"type":"noise","format":"image","num_channels":8},"condition":{"type":"timesteps","format":"timesteps","num_channels":1}},"outputs":{"pred":{"type":"feature","format":"image","channel_def":{"0":"image"}}}},"displayable":null},{"name":"brats_mri_segmentation","versions":["0.5.4","0.5.3","0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.9","0.3.8","0.3.7","0.3.6","0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.3.0","0.2.1","0.2.0","0.1.1","0.1.0"],"version":"0.5.4","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"MR","num_channels":4}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"Tumor core","1":"Whole tumor","2":"Enhancing tumor"}}}},"displayable":null},{"name":"breast_density_classification","versions":["0.1.8","0.1.7","0.1.6","0.1.5","0.1.2","0.1.1","0.1.0"],"version":"0.1.9","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"Mammogram","num_channels":3}},"outputs":{"pred":{"type":"image","format":"labels","channel_def":{"0":"A","1":"B","2":"C","3":"D"}}}},"displayable":null},{"name":"classification_template","versions":["0.0.4","0.0.3","0.0.2","0.0.1"],"version":"0.0.4","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"none","num_channels":1}},"outputs":{"pred":{"type":"probabilities","format":"classes","channel_def":{"0":"background","1":"circle","2":"triangle","3":"rectangle"}}}},"displayable":null},{"name":"cxr_image_synthesis_latent_diffusion_model","versions":["1.0.2","1.0.1"],"version":"1.0.3","ndf":{"inputs":{"latent_representation":{"type":"image","format":"magnitude","modality":"CXR","num_channels":3},"timesteps":{"type":"vector","format":"magnitude","num_channels":1},"context":{"type":"vector","format":"magnitude","num_channels":1024}},"outputs":{"pred":{"type":"image","format":"magnitude","channel_def":{"0":"X-ray"}}}},"displayable":null},{"name":"endoscopic_inbody_classification","versions":["0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.9","0.3.8","0.3.7","0.3.6","0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.3.0","0.2.2","0.2.1","0.2.0"],"version":"0.5.1","ndf":{"inputs":{"image":{"type":"magnitude","format":"RGB","modality":"regular","num_channels":3}},"outputs":{"pred":{"type":"probabilities","format":"classes","channel_def":{"0":"in body","1":"out body"}}}},"displayable":null},{"name":"endoscopic_tool_segmentation","versions":["0.6.2","0.6.1","0.6.0","0.5.9","0.5.8","0.5.7","0.5.6","0.5.5","0.5.4","0.5.3","0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.2","0.3.1","0.3.0","0.2.1","0.2.0"],"version":"0.6.2","ndf":{"inputs":{"image":{"type":"magnitude","format":"RGB","modality":"regular","num_channels":3}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"tools"}}}},"displayable":null},{"name":"lung_nodule_ct_detection","versions":["0.6.10","0.6.9","0.6.8","0.6.7","0.6.6","0.6.5","0.6.4","0.6.3","0.6.2","0.6.1","0.6.0","0.5.9","0.5.8","0.5.7","0.5.6","0.5.5","0.5.4","0.5.3","0.5.2","0.5.1","0.5.0","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.0","0.2.0","0.1.1","0.1.0"],"version":"0.6.11","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"object","format":"dict"}}},"displayable":null},{"name":"maisi_ct_generative","versions":["1.0.2","1.0.1","1.0.0","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.6"],"version":"1.0.3","ndf":null,"displayable":null},{"name":"mednist_ddpm","versions":["1.0.3","1.0.2","1.0.1"],"version":"1.0.3","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"xray","num_channels":1}},"outputs":{"pred":{"type":"image","format":"magnitude","channel_def":{"0":"image"}}}},"displayable":null},{"name":"mednist_gan","versions":["0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.0","0.2.0","0.1.0"],"version":"0.4.4","ndf":{"inputs":{"latent":{"type":"tuples","format":"latent","num_channels":0}},"outputs":{"pred":{"type":"image","format":"magnitude","channel_def":{"0":"image"}}}},"displayable":null},{"name":"mednist_reg","versions":["0.0.7","0.0.6","0.0.5","0.0.4","0.0.3","0.0.2","0.0.1"],"version":"0.0.8","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","num_channels":2}},"outputs":{"pred":{"type":"image","format":"magnitude","channel_def":{"0":"image"}}}},"displayable":null},{"name":"multi_organ_segmentation","versions":["0.0.6","0.0.5","0.0.4","0.0.3"],"version":"0.0.7","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"artery","2":"portal vein","3":"liver","4":"spleen","5":"stomach","6":"gallbladder","7":"pancreas"}}}},"displayable":null},{"name":"pancreas_ct_dints_segmentation","versions":["0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.9","0.3.8","0.3.7","0.3.6","0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.3.0","0.2.0","0.1.1","0.1.0"],"version":"0.5.4","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"pancreas","2":"pancreatic tumor"}}}},"displayable":null},{"name":"pathology_nuclei_classification","versions":["0.2.2","0.2.1","0.2.0","0.1.9","0.1.8","0.1.7","0.1.6","0.1.5","0.1.4","0.1.3","0.1.2","0.1.1","0.1.0","0.0.9","0.0.8","0.0.7","0.0.6","0.0.5","0.0.4","0.0.3","0.0.2","0.0.1"],"version":"0.2.4","ndf":{"inputs":{"image":{"type":"magnitude","format":"RGB","modality":"regular","num_channels":4}},"outputs":{"pred":{"type":"probabilities","format":"classes","channel_def":{"0":"Other","1":"Inflammatory","2":"Epithelial","3":"Spindle-Shaped"}}}},"displayable":null},{"name":"pathology_nuclei_segmentation_classification","versions":["0.2.8","0.2.7","0.2.6","0.2.5","0.2.4","0.2.3","0.2.2","0.2.1","0.2.0","0.1.9","0.1.8","0.1.7","0.1.6","0.1.5","0.1.4","0.1.3","0.1.2","0.1.1","0.1.0"],"version":"0.2.9","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","num_channels":3}},"outputs":{"nucleus_prediction":{"type":"probability","format":"segmentation","channel_def":{"0":"background","1":"nuclei"}},"horizontal_vertical":{"type":"probability","format":"regression","channel_def":{"0":"horizontal distances map","1":"vertical distances map"}},"type_prediction":{"type":"probability","format":"classification","channel_def":{"0":"background","1":"type of nucleus for each pixel"}}}},"displayable":null},{"name":"pathology_nuclick_annotation","versions":["0.2.3","0.2.2","0.2.1","0.2.0","0.1.9","0.1.8","0.1.7","0.1.6","0.1.5","0.1.4","0.1.3","0.1.2","0.1.1","0.1.0","0.0.9","0.0.8","0.0.7","0.0.6","0.0.5","0.0.4","0.0.3","0.0.2","0.0.1"],"version":"0.2.5","ndf":{"inputs":{"image":{"type":"png","format":"RGB","modality":"regular","num_channels":5}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"Nuclei"}}}},"displayable":null},{"name":"pathology_tumor_detection","versions":["0.6.4","0.6.3","0.6.2","0.6.1","0.6.0","0.5.9","0.5.8","0.5.7","0.5.6","0.5.5","0.5.4","0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.3","0.3.2","0.3.1","0.3.0","0.2.0","0.1.1","0.1.0"],"version":"0.6.4","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","num_channels":3}},"outputs":{"pred":{"type":"probability","format":"classification","channel_def":{"0":"metastasis"}}}},"displayable":null},{"name":"pediatric_abdominal_ct_segmentation","versions":["0.4.6","0.4.5","0.4.4"],"version":"0.4.7","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation"}}},"displayable":null},{"name":"prostate_mri_anatomy","versions":["0.3.6","0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.3.0","0.2.0","0.1.1","0.1.0"],"version":"0.3.7","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"MR","num_channels":1}},"outputs":{"pred":{"type":"image","format":"labels","channel_def":{"0":"background","1":"central gland","2":"peripheral zone"}}}},"displayable":null},{"name":"renalStructures_CECT_segmentation","versions":["0.2.3","0.2.2","0.2.1","0.2.0","0.1.0"],"version":"0.2.4","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":3}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"artery","2":"vein","3":"ureter","4":"neoplasm","5":"parenchyma"}}}},"displayable":null},{"name":"renalStructures_UNEST_segmentation","versions":["0.2.7","0.2.6","0.2.5","0.2.4","0.2.3","0.2.2","0.2.1","0.2.0","0.1.3","0.1.2","0.1.1","0.1.0"],"version":"0.2.8","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"kidney cortex","2":"medulla","3":"pelvicalyceal system"}}}},"displayable":null},{"name":"retinalOCT_RPD_segmentation","versions":["0.0.1"],"version":"0.0.2","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"OCT","num_channels":1}},"outputs":{"pred":{"type":"dictionary","format":"COCO","channel_def":{"0":"RPD"}}}},"displayable":null},{"name":"segmentation_template","versions":["0.0.4","0.0.3","0.0.2","0.0.1"],"version":"0.0.4","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"none","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"category 1","2":"category 2","3":"category 3"}}}},"displayable":null},{"name":"spleen_ct_segmentation","versions":["0.6.1","0.6.0","0.5.9","0.5.8","0.5.7","0.5.6","0.5.5","0.5.4","0.5.3","0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.9","0.3.8","0.3.7","0.3.6","0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.2.0","0.1.1","0.1.0"],"version":"0.6.1","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"spleen"}}}},"displayable":null},{"name":"spleen_deepedit_annotation","versions":["0.5.8","0.5.7","0.5.6","0.5.5","0.5.4","0.5.3","0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1","0.4.0","0.3.9","0.3.8","0.3.7","0.3.6","0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.3.0","0.2.0","0.1.0"],"version":"0.5.10","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":3}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"spleen"}}}},"displayable":null},{"name":"swin_unetr_btcv_segmentation","versions":["0.5.8","0.5.7","0.5.6","0.5.5","0.5.4","0.5.3","0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.2","0.4.1","0.4.0","0.3.9","0.3.8","0.3.7","0.3.6","0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.3.0","0.2.0","0.1.0"],"version":"0.5.9","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"spleen","2":"Right Kidney","3":"Left Kideny","4":"Gallbladder","5":"Esophagus","6":"Liver","7":"Stomach","8":"Aorta","9":"IVC","10":"Portal and Splenic Veins","11":"Pancreas","12":"Right adrenal gland","13":"Left adrenal gland"}}}},"displayable":null},{"name":"valve_landmarks","versions":["0.5.2","0.5.1","0.5.0","0.4.3","0.4.2","0.4.1","0.4.0","0.3.0","0.2.0","0.1.0"],"version":"0.5.3","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"MR","num_channels":1}},"outputs":{"pred":{"type":"tuples","format":"points","channel_def":{"0":"Y Dimension","1":"X Dimension"}}}},"displayable":null},{"name":"ventricular_short_axis_3label","versions":["0.3.5","0.3.4","0.3.3","0.3.2","0.3.1","0.3.0","0.2.0","0.1.0"],"version":"0.3.5","ndf":{"inputs":{"image":{"type":"image","format":"magnitude","modality":"MR","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"lv_pool","2":"myocardium","3":"rv_pool"}}}},"displayable":null},{"name":"vista2d","versions":["0.4.0","0.3.1","0.3.0","0.2.9","0.2.8","0.2.7","0.2.6","0.2.5","0.2.4","0.2.3","0.2.2","0.2.1"],"version":"0.4.1","ndf":{"inputs":{"image":{"type":"image","format":"RGB","num_channels":3}},"outputs":{"pred":{"type":"image","format":"segmentation"}}},"displayable":null},{"name":"vista3d","versions":["0.5.11","0.5.10","0.5.8","0.5.7","0.5.6","0.5.5","0.5.4","0.5.3","0.5.2","0.5.1","0.5.0","0.4.9","0.4.8","0.4.7","0.4.6","0.4.5","0.4.4","0.4.3","0.4.2","0.4.1"],"version":"0.5.13","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"liver","2":"kidney","3":"spleen","4":"pancreas","5":"right kidney","6":"aorta","7":"inferior vena cava","8":"right adrenal gland","9":"left adrenal gland","10":"gallbladder","11":"esophagus","12":"stomach","13":"duodenum","14":"left kidney","15":"bladder","16":"prostate or uterus","17":"portal vein and splenic vein","18":"rectum","19":"small bowel","20":"lung","21":"bone","22":"brain","23":"lung tumor","24":"pancreatic tumor","25":"hepatic vessel","26":"hepatic tumor","27":"colon cancer primaries","28":"left lung upper lobe","29":"left lung lower lobe","30":"right lung upper lobe","31":"right lung middle lobe","32":"right lung lower lobe","33":"vertebrae L5","34":"vertebrae L4","35":"vertebrae L3","36":"vertebrae L2","37":"vertebrae L1","38":"vertebrae T12","39":"vertebrae T11","40":"vertebrae T10","41":"vertebrae T9","42":"vertebrae T8","43":"vertebrae T7","44":"vertebrae T6","45":"vertebrae T5","46":"vertebrae T4","47":"vertebrae T3","48":"vertebrae T2","49":"vertebrae T1","50":"vertebrae C7","51":"vertebrae C6","52":"vertebrae C5","53":"vertebrae C4","54":"vertebrae C3","55":"vertebrae C2","56":"vertebrae C1","57":"trachea","58":"left iliac artery","59":"right iliac artery","60":"left iliac vena","61":"right iliac vena","62":"colon","63":"left rib 1","64":"left rib 2","65":"left rib 3","66":"left rib 4","67":"left rib 5","68":"left rib 6","69":"left rib 7","70":"left rib 8","71":"left rib 9","72":"left rib 10","73":"left rib 11","74":"left rib 12","75":"right rib 1","76":"right rib 2","77":"right rib 3","78":"right rib 4","79":"right rib 5","80":"right rib 6","81":"right rib 7","82":"right rib 8","83":"right rib 9","84":"right rib 10","85":"right rib 11","86":"right rib 12","87":"left humerus","88":"right humerus","89":"left scapula","90":"right scapula","91":"left clavicula","92":"right clavicula","93":"left femur","94":"right femur","95":"left hip","96":"right hip","97":"sacrum","98":"left gluteus maximus","99":"right gluteus maximus","100":"left gluteus medius","101":"right gluteus medius","102":"left gluteus minimus","103":"right gluteus minimus","104":"left autochthon","105":"right autochthon","106":"left iliopsoas","107":"right iliopsoas","108":"left atrial appendage","109":"brachiocephalic trunk","110":"left brachiocephalic vein","111":"right brachiocephalic vein","112":"left common carotid artery","113":"right common carotid artery","114":"costal cartilages","115":"heart","116":"left kidney cyst","117":"right kidney cyst","118":"prostate","119":"pulmonary vein","120":"skull","121":"spinal cord","122":"sternum","123":"left subclavian artery","124":"right subclavian artery","125":"superior vena cava","126":"thyroid gland","127":"vertebrae S1","128":"bone lesion","129":"kidney mass","130":"liver tumor","131":"vertebrae L6","132":"airway"}}}},"displayable":null},{"name":"wholeBody_ct_segmentation","versions":["0.2.7","0.2.6","0.2.5","0.2.4","0.2.3","0.2.2","0.2.1","0.2.0","0.1.9","0.1.8","0.1.7","0.1.6","0.1.5","0.1.4","0.1.3","0.1.2","0.1.1","0.1.0"],"version":"0.2.8","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"CT","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"spleen","2":"kidney_right","3":"kidney_left","4":"gallbladder","5":"liver","6":"stomach","7":"aorta","8":"inferior_vena_cava","9":"portal_vein_and_splenic_vein","10":"pancreas","11":"adrenal_gland_right","12":"adrenal_gland_left","13":"lung_upper_lobe_left","14":"lung_lower_lobe_left","15":"lung_upper_lobe_right","16":"lung_middle_lobe_right","17":"lung_lower_lobe_right","18":"vertebrae_L5","19":"vertebrae_L4","20":"vertebrae_L3","21":"vertebrae_L2","22":"vertebrae_L1","23":"vertebrae_T12","24":"vertebrae_T11","25":"vertebrae_T10","26":"vertebrae_T9","27":"vertebrae_T8","28":"vertebrae_T7","29":"vertebrae_T6","30":"vertebrae_T5","31":"vertebrae_T4","32":"vertebrae_T3","33":"vertebrae_T2","34":"vertebrae_T1","35":"vertebrae_C7","36":"vertebrae_C6","37":"vertebrae_C5","38":"vertebrae_C4","39":"vertebrae_C3","40":"vertebrae_C2","41":"vertebrae_C1","42":"esophagus","43":"trachea","44":"heart_myocardium","45":"heart_atrium_left","46":"heart_ventricle_left","47":"heart_atrium_right","48":"heart_ventricle_right","49":"pulmonary_artery","50":"brain","51":"iliac_artery_left","52":"iliac_artery_right","53":"iliac_vena_left","54":"iliac_vena_right","55":"small_bowel","56":"duodenum","57":"colon","58":"rib_left_1","59":"rib_left_2","60":"rib_left_3","61":"rib_left_4","62":"rib_left_5","63":"rib_left_6","64":"rib_left_7","65":"rib_left_8","66":"rib_left_9","67":"rib_left_10","68":"rib_left_11","69":"rib_left_12","70":"rib_right_1","71":"rib_right_2","72":"rib_right_3","73":"rib_right_4","74":"rib_right_5","75":"rib_right_6","76":"rib_right_7","77":"rib_right_8","78":"rib_right_9","79":"rib_right_10","80":"rib_right_11","81":"rib_right_12","82":"humerus_left","83":"humerus_right","84":"scapula_left","85":"scapula_right","86":"clavicula_left","87":"clavicula_right","88":"femur_left","89":"femur_right","90":"hip_left","91":"hip_right","92":"sacrum","93":"face","94":"gluteus_maximus_left","95":"gluteus_maximus_right","96":"gluteus_medius_left","97":"gluteus_medius_right","98":"gluteus_minimus_left","99":"gluteus_minimus_right","100":"autochthon_left","101":"autochthon_right","102":"iliopsoas_left","103":"iliopsoas_right","104":"urinary_bladder"}}}},"displayable":{"highres":true,"sw_overlap":0.25,"sw_batch_size":1}},{"name":"wholeBrainSeg_Large_UNEST_segmentation","versions":["0.2.7","0.2.6","0.2.5","0.2.4","0.2.3","0.2.2","0.2.1","0.2.0","0.1.2","0.1.1","0.1.0"],"version":"0.2.8","ndf":{"inputs":{"image":{"type":"image","format":"hounsfield","modality":"MRI","num_channels":1}},"outputs":{"pred":{"type":"image","format":"segmentation","channel_def":{"0":"background","1":"3rd-Ventricle","2":"4th-Ventricle","3":"Right-Accumbens-Area","4":"Left-Accumbens-Area","5":"Right-Amygdala","6":"Left-Amygdala","7":"Brain-Stem","8":"Right-Caudate","9":"Left-Caudate","10":"Right-Cerebellum-Exterior","11":"Left-Cerebellum-Exterior","12":"Right-Cerebellum-White-Matter","13":"Left-Cerebellum-White-Matter","14":"Right-Cerebral-White-Matter","15":"Left-Cerebral-White-Matter","16":"Right-Hippocampus","17":"Left-Hippocampus","18":"Right-Inf-Lat-Vent","19":"Left-Inf-Lat-Vent","20":"Right-Lateral-Ventricle","21":"Left-Lateral-Ventricle","22":"Right-Pallidum","23":"Left-Pallidum","24":"Right-Putamen","25":"Left-Putamen","26":"Right-Thalamus-Proper","27":"Left-Thalamus-Proper","28":"Right-Ventral-DC","29":"Left-Ventral-DC","30":"Cerebellar-Vermal-Lobules-I-V","31":"Cerebellar-Vermal-Lobules-VI-VII","32":"Cerebellar-Vermal-Lobules-VIII-X","33":"Left-Basal-Forebrain","34":"Right-Basal-Forebrain","35":"Right-ACgG--anterior-cingulate-gyrus","36":"Left-ACgG--anterior-cingulate-gyrus","37":"Right-AIns--anterior-insula","38":"Left-AIns--anterior-insula","39":"Right-AOrG--anterior-orbital-gyrus","40":"Left-AOrG--anterior-orbital-gyrus","41":"Right-AnG---angular-gyrus","42":"Left-AnG---angular-gyrus","43":"Right-Calc--calcarine-cortex","44":"Left-Calc--calcarine-cortex","45":"Right-CO----central-operculum","46":"Left-CO----central-operculum","47":"Right-Cun---cuneus","48":"Left-Cun---cuneus","49":"Right-Ent---entorhinal-area","50":"Left-Ent---entorhinal-area","51":"Right-FO----frontal-operculum","52":"Left-FO----frontal-operculum","53":"Right-FRP---frontal-pole","54":"Left-FRP---frontal-pole","55":"Right-FuG---fusiform-gyrus ","56":"Left-FuG---fusiform-gyrus","57":"Right-GRe---gyrus-rectus","58":"Left-GRe---gyrus-rectus","59":"Right-IOG---inferior-occipital-gyrus","60":"Left-IOG---inferior-occipital-gyrus","61":"Right-ITG---inferior-temporal-gyrus","62":"Left-ITG---inferior-temporal-gyrus","63":"Right-LiG---lingual-gyrus","64":"Left-LiG---lingual-gyrus","65":"Right-LOrG--lateral-orbital-gyrus","66":"Left-LOrG--lateral-orbital-gyrus","67":"Right-MCgG--middle-cingulate-gyrus","68":"Left-MCgG--middle-cingulate-gyrus","69":"Right-MFC---medial-frontal-cortex","70":"Left-MFC---medial-frontal-cortex","71":"Right-MFG---middle-frontal-gyrus","72":"Left-MFG---middle-frontal-gyrus","73":"Right-MOG---middle-occipital-gyrus","74":"Left-MOG---middle-occipital-gyrus","75":"Right-MOrG--medial-orbital-gyrus","76":"Left-MOrG--medial-orbital-gyrus","77":"Right-MPoG--postcentral-gyrus","78":"Left-MPoG--postcentral-gyrus","79":"Right-MPrG--precentral-gyrus","80":"Left-MPrG--precentral-gyrus","81":"Right-MSFG--superior-frontal-gyrus","82":"Left-MSFG--superior-frontal-gyrus","83":"Right-MTG---middle-temporal-gyrus","84":"Left-MTG---middle-temporal-gyrus","85":"Right-OCP---occipital-pole","86":"Left-OCP---occipital-pole","87":"Right-OFuG--occipital-fusiform-gyrus","88":"Left-OFuG--occipital-fusiform-gyrus","89":"Right-OpIFG-opercular-part-of-the-IFG","90":"Left-OpIFG-opercular-part-of-the-IFG","91":"Right-OrIFG-orbital-part-of-the-IFG","92":"Left-OrIFG-orbital-part-of-the-IFG","93":"Right-PCgG--posterior-cingulate-gyrus","94":"Left-PCgG--posterior-cingulate-gyrus","95":"Right-PCu---precuneus","96":"Left-PCu---precuneus","97":"Right-PHG---parahippocampal-gyrus","98":"Left-PHG---parahippocampal-gyrus","99":"Right-PIns--posterior-insula","100":"Left-PIns--posterior-insula","101":"Right-PO----parietal-operculum","102":"Left-PO----parietal-operculum","103":"Right-PoG---postcentral-gyrus","104":"Left-PoG---postcentral-gyrus","105":"Right-POrG--posterior-orbital-gyrus","106":"Left-POrG--posterior-orbital-gyrus","107":"Right-PP----planum-polare","108":"Left-PP----planum-polare","109":"Right-PrG---precentral-gyrus","110":"Left-PrG---precentral-gyrus","111":"Right-PT----planum-temporale","112":"Left-PT----planum-temporale","113":"Right-SCA---subcallosal-area","114":"Left-SCA---subcallosal-area","115":"Right-SFG---superior-frontal-gyrus","116":"Left-SFG---superior-frontal-gyrus","117":"Right-SMC---supplementary-motor-cortex","118":"Left-SMC---supplementary-motor-cortex","119":"Right-SMG---supramarginal-gyrus","120":"Left-SMG---supramarginal-gyrus","121":"Right-SOG---superior-occipital-gyrus","122":"Left-SOG---superior-occipital-gyrus","123":"Right-SPL---superior-parietal-lobule","124":"Left-SPL---superior-parietal-lobule","125":"Right-STG---superior-temporal-gyrus","126":"Left-STG---superior-temporal-gyrus","127":"Right-TMP---temporal-pole","128":"Left-TMP---temporal-pole","129":"Right-TrIFG-triangular-part-of-the-IFG","130":"Left-TrIFG-triangular-part-of-the-IFG","131":"Right-TTG---transverse-temporal-gyrus","132":"Left-TTG---transverse-temporal-gyrus"}}}},"displayable":null}]};
+// <catalog:end>
+
+/** Colab の T4 で最後まで通した Bundle（ジョブの完走とラベルが返るところまで。結果の正しさは AV-MON-001 の検証表）。 */
+export const RAN = {
+  date: "2026-10-03",
+  names: [
+    "spleen_ct_segmentation", "wholeBody_ct_segmentation", "swin_unetr_btcv_segmentation", "multi_organ_segmentation",
+    "pancreas_ct_dints_segmentation", "renalStructures_UNEST_segmentation", "prostate_mri_anatomy",
+    "wholeBrainSeg_Large_UNEST_segmentation",
+  ],
+};
+
+/** 表示名（日本語）。一覧に無いものは Bundle 名のまま出す。 */
+const JA = {
+  spleen_ct_segmentation: "脾臓",
+  wholeBody_ct_segmentation: "全身 104 臓器",
+  swin_unetr_btcv_segmentation: "腹部 13 臓器（BTCV）",
+  multi_organ_segmentation: "腹部 7 臓器",
+  pancreas_ct_dints_segmentation: "膵臓・膵腫瘍",
+  renalStructures_UNEST_segmentation: "腎臓の構造（造影 CT）",
+  prostate_mri_anatomy: "前立腺（T2 MR）",
+  wholeBrainSeg_Large_UNEST_segmentation: "脳 133 領域（T1 MR）",
+};
+
+/** 判定は通るが、いまの実行コードでは動かない見込みのもの（理由つき）。選べない。 */
+export const NOT_YET = {
+  vista3d: "入力がプロンプト（ラベル番号・点）つきの辞書で、いまの実行コードは画像のパスの一覧しか渡せません",
+};
+
 /**
- * 選べる Bundle（2026-10-03 に Hugging Face の MONAI 組織で configs/metadata.json を読んで確かめた）。
- * modality は送る前の絞り込みにだけ使う。使えるかの最終判定は計算機の上で metadata.json から行う。
- * 8 本とも 2026-10-03 に Colab の T4 で最後まで通した（automator/src/spike/computeMonaiCatalogCheck.ts）。
+ * Model Zoo の 1 Bundle を一覧の 1 行にする。取得できなかった値は null（0 や空で埋めない）。
+ * @param {string} name
+ * @param {string[]} versions model_info.json にある版
+ * @param {any} metadata configs/metadata.json（取得できなければ null）
+ * @param {any} inference configs/inference.json（JSON でない・取得できなければ null）
  */
-export const CATALOG = [
-  { name: "spleen_ct_segmentation", label: "脾臓", modality: "CT", labels: 1 },
-  { name: "wholeBody_ct_segmentation", label: "全身 104 臓器", modality: "CT", labels: 104 },
-  { name: "swin_unetr_btcv_segmentation", label: "腹部 13 臓器（BTCV）", modality: "CT", labels: 13 },
-  { name: "multi_organ_segmentation", label: "腹部 7 臓器", modality: "CT", labels: 7 },
-  { name: "pancreas_ct_dints_segmentation", label: "膵臓・膵腫瘍", modality: "CT", labels: 2 },
-  { name: "renalStructures_UNEST_segmentation", label: "腎臓の構造（造影 CT）", modality: "CT", labels: 3 },
-  { name: "prostate_mri_anatomy", label: "前立腺（T2 MR）", modality: "MR", labels: 2 },
-  { name: "wholeBrainSeg_Large_UNEST_segmentation", label: "脳 133 領域（T1 MR）", modality: "MR", labels: 132 },
-];
+export function zooEntry(name, versions, metadata, inference) {
+  const f = metadata && metadata.network_data_format;
+  const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] !== undefined).map((k) => [k, o[k]]));
+  const side = (m, keys) => (m && typeof m === "object"
+    ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, pick(v, keys)])) : null);
+  const dc = inference && typeof inference.displayable_configs === "object" ? inference.displayable_configs : null;
+  return {
+    name,
+    versions: [...versions].sort((a, b) => b.localeCompare(a, undefined, { numeric: true })),
+    version: metadata?.version ?? null,
+    ndf: f ? { inputs: side(f.inputs, ["type", "format", "modality", "num_channels"]), outputs: side(f.outputs, ["type", "format", "channel_def"]) } : null,
+    displayable: dc,
+  };
+}
+
+/** 一覧の 1 行を、表示中のシリーズに対して分類する。 */
+export function classify(entry, modality) {
+  const v = judge({ network_data_format: entry.ndf ?? undefined }, { modality });
+  const ran = RAN.names.includes(entry.name);
+  if (!v.ok) return { kind: "stopped", reasons: v.reasons, verdict: v, ran };
+  if (NOT_YET[entry.name]) return { kind: "stopped", reasons: [NOT_YET[entry.name]], verdict: v, ran };
+  return { kind: ran ? "ran" : "untested", reasons: [], verdict: v, ran };
+}
+
+export const labelOf = (entry) => JA[entry.name] ?? entry.name;
+
 const OTHER = "__other__";
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/;
 
@@ -104,7 +155,8 @@ def fetch():
     name, repo = B['name'], None
     if '/' in name:
         repo, name = name, name.split('/')[-1]
-    bdir = os.path.join(CACHE, 'bundles')
+    # 版ごとに分ける（名前だけだと、別の版が残っていたときにそれを使ってしまう）
+    bdir = os.path.join(CACHE, 'bundles', B['version']) if B.get('version') else os.path.join(CACHE, 'bundles')
     root = os.path.join(bdir, name)
     meta = os.path.join(root, 'configs', 'metadata.json')
     if os.path.isfile(meta):
@@ -165,6 +217,8 @@ def judge(meta, modality):
     reasons = []
     fmt = meta.get('network_data_format') or {}
     ins, outs = fmt.get('inputs') or {}, fmt.get('outputs') or {}
+    if not ins or not outs:
+        reasons.append('入力・出力の形式（network_data_format）が書かれていないので、セグメンテーションのモデルと確認できません')
     if len(ins) > 1:
         reasons.append('入力が %d つ要るモデルです（%s）。1 シリーズでは動かせません' % (len(ins), '・'.join(ins)))
     image = ins.get('image') or (next(iter(ins.values())) if ins else None)
@@ -432,6 +486,42 @@ export function validBundleName(name) {
   return NAME_RE.test(name);
 }
 
+/**
+ * 「最新に更新」で計算機に送るコード（画像は送らない）。Model Zoo の model_info.json と各 Bundle の configs/ を取り、
+ * 生のまま outputs/zoo.json に書く（一覧への変換は zooEntry。生成スクリプトと同じ関数）。
+ */
+export const REFRESH_PY = String.raw`
+import json, re, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+RAW = 'https://raw.githubusercontent.com/Project-MONAI/model-zoo/dev/models'
+
+
+def get(url):
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            return json.loads(r.read().decode('utf-8'))
+    except Exception:
+        return None
+
+
+info = get(RAW + '/model_info.json')
+if not info:
+    raise RuntimeError('zoo-fetch-failed: model_info.json を取得できませんでした')
+versions = {}
+for key in info:
+    m = re.match(r'^(.*)_v(\d+\.\d+\.\d+)$', key)
+    if m:
+        versions.setdefault(m.group(1), []).append(m.group(2))
+names = sorted(versions)
+with ThreadPoolExecutor(8) as ex:
+    metas = list(ex.map(lambda n: get(RAW + '/' + n + '/configs/metadata.json'), names))
+    infs = list(ex.map(lambda n: get(RAW + '/' + n + '/configs/inference.json'), names))
+json.dump({'entries': [{'name': n, 'versions': versions[n], 'metadata': m, 'inference': i}
+                       for n, m, i in zip(names, metas, infs)]},
+          open('outputs/zoo.json', 'w', encoding='utf-8'), ensure_ascii=False)
+`;
+
 /** 本体がデータを作らなかった理由（よく出るものだけ）。 */
 const REFUSALS = {
   "npz-duplicate-positions": "同じ位置のスライスが 2 枚以上あります（撮影が 2 回ぶん混ざったシリーズなど）。1 回ぶんだけのシリーズで試してください",
@@ -502,7 +592,9 @@ export function judge(meta, target) {
   const outputs = (fmt && fmt.outputs) || {};
   const inKeys = Object.keys(inputs);
   const outKeys = Object.keys(outputs);
-  if (!fmt || inKeys.length === 0) warnings.push("入力の形式が書かれていないので、使えるかを判定できません");
+  if (!fmt || inKeys.length === 0 || outKeys.length === 0) {
+    reasons.push("入力・出力の形式（network_data_format）が書かれていないので、セグメンテーションのモデルと確認できません");
+  }
   if (inKeys.length > 1) reasons.push(`入力が ${inKeys.length} つ要るモデルです（${inKeys.join("・")}）。1 シリーズでは動かせません`);
   const image = inputs.image ?? inputs[inKeys[0]];
   if (image) {
@@ -636,18 +728,42 @@ export async function activate(host) {
     return e;
   };
   const have = normModality(target.modality);
-  const picker = el("select", { testid: "monai-bundle", style: "flex: 1" },
-    ...CATALOG.map((c) => {
-      const o = el("option", {
-        value: c.name,
-        textContent: `${c.label}（${c.modality}）— ${c.name}`,
-      });
-      if (c.modality !== have) { o.disabled = true; o.textContent += `（${have || "?"} には使えない）`; }
-      return o;
-    }),
-    el("option", { value: OTHER, textContent: "その他（名前を入れる）" }));
-  const firstUsable = CATALOG.find((c) => c.modality === have);
-  picker.value = firstUsable ? firstUsable.name : OTHER;
+  /** 一覧（同梱のスナップショット。「最新に更新」で置き換わる） */
+  let zoo = { entries: ZOO.entries, fetched: ZOO.fetched };
+  const entryOf = (name) => zoo.entries.find((e) => e.name === name);
+  const picker = el("select", { testid: "monai-bundle", style: "flex: 1; min-width: 0; max-width: 100%" });
+  const versionSel = el("select", { testid: "monai-version", title: "Bundle の版（既定は最新）" });
+  const refreshBtn = el("button", { textContent: "一覧を更新", testid: "monai-refresh", style: "white-space: nowrap", title: "計算機で Model Zoo の最新の一覧を取得します（画像は送りません）" });
+  const listNote = el("div", { testid: "monai-list-note", style: "font-size: 11px; color: #52606d" });
+  const group = (label) => el("optgroup", { label });
+  const fillPicker = () => {
+    const rows = zoo.entries.map((e) => ({ e, c: classify(e, have) }));
+    const opt = (e, text, disabled) => el("option", { value: e.name, textContent: text, disabled });
+    const mark = (c) => (c.kind === "ran" ? "" : "（未検証）");
+    const usable = group("使える");
+    const order = (r) => (r.c.kind === "ran" ? RAN.names.indexOf(r.e.name) : 100);
+    for (const { e, c } of rows.filter((r) => r.c.kind === "ran" || r.c.kind === "untested").sort((x, y) => order(x) - order(y))) {
+      usable.append(opt(e, `${labelOf(e)} — ${e.name}${mark(c)}`, false));
+    }
+    const stopped = group(`${have || "?"} のこのシリーズには使えない`);
+    for (const { e, c } of rows.filter((r) => r.c.kind === "stopped")) {
+      stopped.append(opt(e, `${e.name} — ${(c.reasons[0] ?? "").slice(0, 36)}…`, true));
+    }
+    const prev = picker.value;
+    picker.replaceChildren(usable, stopped, el("option", { value: OTHER, textContent: "その他（名前を入れる）" }));
+    const first = usable.querySelector("option:not([disabled])");
+    picker.value = [...picker.options].some((o) => o.value === prev && !o.disabled) ? prev : (first ? first.value : OTHER);
+    const n = usable.children.length;
+    listNote.textContent = `Model Zoo ${zoo.entries.length} 本のうち、このシリーズに使えるのは ${n} 本（${zoo.fetched ?? "取得日不明"} 時点）。` +
+      `「未検証」は、判定を通っただけで Colab で最後まで通したことはありません。`;
+  };
+  const fillVersions = () => {
+    const e = entryOf(picker.value);
+    versionSel.replaceChildren(...(e ? e.versions : []).map((v, i) => el("option", { value: v, textContent: i === 0 ? `${v}（最新）` : v })));
+    versionSel.style.display = e ? "" : "none";
+  };
+  fillPicker();
+  fillVersions();
   const nameInput = el("input", { testid: "monai-bundle-name", placeholder: "例: MONAI/spleen_ct_segmentation", style: "flex: 1" });
   const runBtn = el("button", { textContent: "実行", testid: "monai-run" });
   const status = el("div", { testid: "monai-status", style: "color: #52606d; min-height: 1.2em" });
@@ -664,20 +780,21 @@ export async function activate(host) {
       style: "font-size: 12px; color: #8a4b00; background: #fdf0e3; border: 1px solid #e0b884; border-radius: 4px; padding: 4px 8px",
     }),
     el("div", {}, `対象: ${target.seriesLabel}（${target.modality}・${target.sliceCount} 枚）`),
-    el("div", { style: "display: flex; gap: 6px" }, picker, runBtn),
+    el("div", { style: "display: flex; gap: 6px" }, picker, versionSel, runBtn),
     otherRow,
+    el("div", { style: "display: flex; gap: 6px; align-items: center" }, refreshBtn, listNote),
     el("div", { style: "font-size: 11px; color: #52606d" },
       "「実行」で、匿名化したこのシリーズを送り、計算機の上でモデルの説明（metadata.json）を読んで使えるかを判定してから推論します。" +
       "合わなければ推論せずに止まります。ライセンスは結果と一緒に出ます。"),
     status, info, preview, labelBox, saveBtn, result,
   );
-  const syncPicker = () => { otherRow.style.display = picker.value === OTHER ? "flex" : "none"; };
+  const syncPicker = () => { otherRow.style.display = picker.value === OTHER ? "flex" : "none"; fillVersions(); };
   picker.addEventListener("change", syncPicker);
   syncPicker();
   const setStatus = (t) => { status.textContent = t; };
   const onProgress = (p, m) => setStatus(`${Math.round(p * 100)}% ${m ?? ""}`);
   // phase は結果を読み終えてから idle に戻す（外から「終わったか」を見る印）
-  const busy = (b) => { state.phase = b ? "running" : "idle"; runBtn.disabled = b; picker.disabled = b; saveBtn.disabled = b || !state.labels; };
+  const busy = (b) => { state.phase = b ? "running" : "idle"; runBtn.disabled = b; picker.disabled = b; versionSel.disabled = b; refreshBtn.disabled = b; saveBtn.disabled = b || !state.labels; };
   win.setCloseGuard?.(() => (state.phase === "running" ? "計算の途中です。閉じると結果を受け取れません。" : null));
   // 閉じたら、この窓で計算に使った Colab のランタイムを解放するかを聞く（確認は本体が出す）。
   // 解放しても次の「実行」が自動で確保し直す
@@ -715,6 +832,22 @@ export async function activate(host) {
     for (const r of b.reasons ?? v.reasons) info.append(el("div", { textContent: "✕ " + r, style: "color: #b42318" }));
   }
 
+  refreshBtn.addEventListener("click", async () => {
+    busy(true);
+    state.usedCompute = true;
+    setStatus("Model Zoo の一覧を取得しています…");
+    const r = await host.compute.runJob({ inputs: [], script: REFRESH_PY, timeoutSec: 600 }, { onProgress });
+    if (!r.ok) { setStatus(r.cancelled ? "取り消しました" : `失敗: ${explain(r.error)}`); busy(false); return; }
+    const raw = r.status === "ok" ? await r.readFile("zoo.json") : null;
+    if (!raw) { setStatus(`失敗: ${r.errorName ?? "一覧が返りませんでした"}${r.errorValue ? ": " + r.errorValue : ""}`); busy(false); return; }
+    const got = JSON.parse(new TextDecoder().decode(raw)).entries;
+    zoo = { entries: got.map((x) => zooEntry(x.name, x.versions, x.metadata, x.inference)), fetched: new Date().toISOString().slice(0, 10) };
+    state.zoo = { count: zoo.entries.length, fetched: zoo.fetched };
+    fillPicker(); syncPicker();
+    setStatus(`一覧を更新しました（${zoo.entries.length} 本）`);
+    busy(false);
+  });
+
   runBtn.addEventListener("click", async () => {
     const name = picker.value === OTHER ? nameInput.value.trim() : picker.value;
     if (!validBundleName(name)) { setStatus("名前に使えない文字があります"); return; }
@@ -725,7 +858,7 @@ export async function activate(host) {
     setStatus("送っています…");
     const r = await host.compute.runJob({
       inputs: [{ studyUid: target.studyUid, seriesUid: target.seriesUid, format: "npz" }],
-      script: buildScript({ name }),
+      script: buildScript({ name, version: picker.value === OTHER || versionSel.value === entryOf(name)?.versions[0] ? null : versionSel.value }),
       timeoutSec: 3600,
     }, { onProgress });
     if (!r.ok) {

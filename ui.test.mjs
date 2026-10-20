@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { CATALOG, buildScript, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName } from "./ui.js";
+import { NOT_YET, RAN, REFRESH_PY, ZOO, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -82,19 +82,66 @@ test("judge tolerates how real bundles describe themselves", () => {
   assert.equal(judge(brain, { modality: "CT" }).ok, false);
 });
 
-test("the catalog only lists single-series segmentation bundles with valid names", () => {
-  assert.ok(CATALOG.length >= 5);
-  for (const c of CATALOG) {
-    assert.equal(validBundleName(c.name), true, c.name);
-    assert.ok(c.modality === "CT" || c.modality === "MR", c.name);
+test("the zoo snapshot has every entry with a valid name and versions, and nulls instead of invented values", () => {
+  assert.ok(ZOO.entries.length >= 30, "Model Zoo は 35 本（2026-10-20）");
+  assert.match(String(ZOO.fetched), /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(new Set(ZOO.entries.map((e) => e.name)).size, ZOO.entries.length);
+  for (const e of ZOO.entries) {
+    assert.equal(validBundleName(e.name), true, e.name);
+    assert.ok(e.versions.length >= 1, e.name);
   }
-  assert.equal(new Set(CATALOG.map((c) => c.name)).size, CATALOG.length);
+  assert.equal(ZOO.entries.find((e) => e.name === "maisi_ct_generative").ndf, null);
 });
 
-test("judge without network_data_format warns but does not block", () => {
+test("every Bundle that already ran on Colab is in the snapshot and usable for its modality", () => {
+  for (const n of RAN.names) {
+    const e = ZOO.entries.find((x) => x.name === n);
+    assert.ok(e, n);
+    const mod = e.ndf.inputs.image.modality.toUpperCase().startsWith("MR") ? "MR" : "CT";
+    assert.equal(classify(e, mod).kind, "ran", n);
+  }
+});
+
+// 実物の metadata.json（2026-10-20 取得）に judge を当てた結果。件数が変わったら、中身を見て更新する
+test("classify on the real zoo: CT 7 usable, MR 3 usable; generative / multi-channel / classification stop", () => {
+  const usable = (mod) => ZOO.entries.filter((e) => ["ran", "untested"].includes(classify(e, mod).kind)).map((e) => e.name).sort();
+  assert.deepEqual(usable("CT"), [
+    "multi_organ_segmentation", "pancreas_ct_dints_segmentation", "pediatric_abdominal_ct_segmentation",
+    "renalStructures_UNEST_segmentation", "spleen_ct_segmentation", "swin_unetr_btcv_segmentation", "wholeBody_ct_segmentation",
+  ].sort());
+  assert.deepEqual(usable("MR"), ["prostate_mri_anatomy", "ventricular_short_axis_3label", "wholeBrainSeg_Large_UNEST_segmentation"]);
+  for (const n of ["maisi_ct_generative", "brats_mri_segmentation", "breast_density_classification", "lung_nodule_ct_detection", "vista2d"]) {
+    const c = classify(ZOO.entries.find((e) => e.name === n), n.startsWith("brats") ? "MR" : "CT");
+    assert.equal(c.kind, "stopped", n);
+    assert.ok(c.reasons.length >= 1, n);
+  }
+  // 判定は通るが、いまの実行コードでは動かない見込みのもの
+  const v = classify(ZOO.entries.find((e) => e.name === "vista3d"), "CT");
+  assert.equal(v.kind, "stopped");
+  assert.equal(v.reasons[0], NOT_YET.vista3d);
+});
+
+test("zooEntry keeps only what the picker needs and reports missing metadata as null", () => {
+  const e = zooEntry("x", ["0.1.0", "0.10.0", "0.2.0"], spleenMeta, { displayable_configs: { highres: true }, other: 1 });
+  assert.deepEqual(e.versions, ["0.10.0", "0.2.0", "0.1.0"]);
+  assert.deepEqual(e.displayable, { highres: true });
+  assert.equal(e.ndf.inputs.image.modality, "CT");
+  const none = zooEntry("y", ["1.0.0"], null, null);
+  assert.equal(none.ndf, null);
+  assert.equal(none.displayable, null);
+});
+
+test("judge stops a bundle without network_data_format", () => {
   const v = judge({}, { modality: "CT" });
-  assert.equal(v.ok, true);
-  assert.ok(v.warnings.length >= 1);
+  assert.equal(v.ok, false);
+  assert.match(v.reasons.join(), /network_data_format/);
+});
+
+test("REFRESH_PY is valid Python and sends no image", () => {
+  const py = process.env.GRAPHY_TEST_PYTHON || "python3";
+  const r = spawnSync(py, ["-I", "-c", "import ast,sys; ast.parse(sys.stdin.read())"], { input: REFRESH_PY, encoding: "utf-8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(REFRESH_PY, /inputs\//);
 });
 
 /** npz の幾何（[dz, dy, dx]・LPS）から loadVolume 風の格子を作る。reversed なら k が逆向き。 */
