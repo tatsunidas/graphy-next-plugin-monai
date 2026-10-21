@@ -1026,7 +1026,7 @@ export async function activate(host) {
     });
     const reload = el("button", { textContent: "開いているタイルを読み直す", testid: "monai-channels-reload", style: "align-self: flex-start" });
     reload.addEventListener("click", fillChannels);
-    rows.push(channelNote, el("div", { style: "font-size: 11px; color: #52606d" }, `シリーズは、同じ患者の画像タイルとして開いておいてください（ビューアのタイル ${allTargets.length} 枚のうち、選べるのは ${tiles.length} 枚）。`), reload);
+    rows.push(channelNote, el("div", { style: "font-size: 11px; color: #52606d" }, `シリーズは、プラグインを開く前に、同じ患者の画像タイルとして開いておいてください（あとから足したタイルは見えません。選べるタイル数は、ビューアのタイル ${allTargets.length} 枚のうち ${tiles.length} 枚）。`), reload);
     channelsBox.replaceChildren(...rows);
     syncChannelNote();
   };
