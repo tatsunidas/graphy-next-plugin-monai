@@ -87,12 +87,14 @@ export function parsePoints(text) {
 }
 
 /**
- * 点 ROI（画素座標＋スライス）を患者座標（LPS, mm）へ。vol は loadVolume の結果（indexToWorld）。
+ * 点 ROI（画素座標＋スライス。画素の左上隅が 0）を患者座標（LPS, mm）へ。vol は loadVolume の結果（indexToWorld）。
  * @param {{ points: Array<[number, number]>, sliceIndex: number }} roi
  * @param {{ indexToWorld: number[], dims: [number, number, number] }} vol
  */
 export function roiToLps(roi, vol) {
-  const [col, row] = roi.points[0];
+  // getRois の画素座標は「画素の左上隅が 0」。indexToWorld は画素の中心が整数なので 0.5 引く
+  const col = roi.points[0][0] - 0.5;
+  const row = roi.points[0][1] - 0.5;
   const k = roi.sliceIndex;
   const m = vol.indexToWorld;
   return [0, 1, 2].map((r) => m[r * 4] * col + m[r * 4 + 1] * row + m[r * 4 + 2] * k + m[r * 4 + 3]);
