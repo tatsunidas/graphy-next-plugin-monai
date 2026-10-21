@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { NOT_YET, RAN, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
+import { NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -103,22 +103,20 @@ test("every Bundle that already ran on Colab is in the snapshot and usable for i
 });
 
 // 実物の metadata.json（2026-10-20 取得）に judge を当てた結果。件数が変わったら、中身を見て更新する
-test("classify on the real zoo: CT 8 usable, MR 4 usable; generative / classification / point-prompt stop", () => {
+test("classify on the real zoo: CT 10 usable, MR 4 usable; generative / classification / point-prompt stop", () => {
   const usable = (mod) => ZOO.entries.filter((e) => ["ran", "untested"].includes(classify(e, mod).kind)).map((e) => e.name).sort();
   assert.deepEqual(usable("CT"), [
     "multi_organ_segmentation", "pancreas_ct_dints_segmentation", "pediatric_abdominal_ct_segmentation",
-    "renalStructures_CECT_segmentation", "renalStructures_UNEST_segmentation", "spleen_ct_segmentation", "swin_unetr_btcv_segmentation", "wholeBody_ct_segmentation",
+    "renalStructures_CECT_segmentation", "renalStructures_UNEST_segmentation", "spleen_ct_segmentation", "spleen_deepedit_annotation", "swin_unetr_btcv_segmentation", "vista3d", "wholeBody_ct_segmentation",
   ].sort());
   assert.deepEqual(usable("MR"), ["brats_mri_segmentation", "prostate_mri_anatomy", "ventricular_short_axis_3label", "wholeBrainSeg_Large_UNEST_segmentation"]);
-  for (const n of ["maisi_ct_generative", "breast_density_classification", "lung_nodule_ct_detection", "vista2d", "spleen_deepedit_annotation"]) {
+  for (const n of ["maisi_ct_generative", "breast_density_classification", "lung_nodule_ct_detection", "vista2d"]) {
     const c = classify(ZOO.entries.find((e) => e.name === n), "CT");
     assert.equal(c.kind, "stopped", n);
     assert.ok(c.reasons.length >= 1, n);
   }
-  // 判定は通るが、いまの実行コードでは動かない見込みのもの
-  const v = classify(ZOO.entries.find((e) => e.name === "vista3d"), "CT");
-  assert.equal(v.kind, "stopped");
-  assert.equal(v.reasons[0], NOT_YET.vista3d);
+  // 点・ラベル番号を渡すモデルは、画面から渡せるので選べる（実機は未確認）
+  for (const n of Object.keys(PROMPTS)) assert.equal(classify(ZOO.entries.find((e) => e.name === n), "CT").kind, "untested", n);
 });
 
 test("zooEntry keeps only what the picker needs and reports missing metadata as null", () => {
@@ -270,6 +268,7 @@ def run(config_file, meta_file, bundle_root, dataset_dir, output_dir, datalist=N
     if datalist is None:
         datalist = kw['test_datalist']
     json.dump(datalist, open(os.path.join(os.getcwd(), 'datalist.json'), 'w'))
+    json.dump({k: v for k, v in kw.items() if k in ('input_dict', 'dataset#data')}, open(os.path.join(os.getcwd(), 'prompt-kw.json'), 'w'))
     first = datalist[0]
     if os.environ.get('FAKE_MULTI'):
         assert isinstance(first, dict), ('want dict datalist', datalist)
@@ -286,6 +285,8 @@ def run(config_file, meta_file, bundle_root, dataset_dir, output_dir, datalist=N
     img = nib.load(first)
     a = np.asanyarray(img.dataobj)
     lab = (a > 500).astype(np.uint8) + (a > 1500).astype(np.uint8)
+    if os.environ.get('FAKE_NOT_INFERRED'):
+        lab[0, 0, :] = 255
     aff = img.affine
     mode = os.environ.get('FAKE_MODE', 'same')
     if mode == 'flip':      # 保存の向きだけ x を反転（同じ場所を指す）
@@ -482,7 +483,8 @@ test("channelPlan reads the channel order from metadata, else from the LoadImage
   const e = (n) => ZOO.entries.find((x) => x.name === n);
   assert.deepEqual(channelPlan(e("brats_mri_segmentation")), { n: 4, names: ["T1c", "T1", "T2", "FLAIR"], order: "metadata" });
   assert.deepEqual(channelPlan(e("renalStructures_CECT_segmentation")), { n: 3, names: ["artery", "vein", "excret"], order: "inference" });
-  assert.equal(channelPlan(e("spleen_deepedit_annotation")).order, "unknown");
+  // DeepEdit の 3 チャネルは、画像 1 + 点の信号 2。画像として重ねるのは 1 本なので複数チャネルの計画は要らない
+  assert.equal(channelPlan(e("spleen_deepedit_annotation")), null);
   assert.equal(channelPlan(e("spleen_ct_segmentation")), null);
   // 1 チャネルの Bundle に複数シリーズを渡すと止まる／複数チャネルに 1 本だと止まる
   const brats = e("brats_mri_segmentation");
@@ -587,4 +589,158 @@ test("channelNameMatches: T1 は T1c に一致しない（語の境界）", asyn
   assert.equal(channelNameMatches("BRATS_001_T1c", "T1c"), true);
   assert.equal(channelNameMatches("flair axial", "FLAIR"), true);
   assert.equal(channelNameMatches("T2star", "T2"), false);
+});
+
+test("parsePoints: 役割の書き方と、壊れた行は行番号つきで止める", () => {
+  const ok = parsePoints("# メモ\n10, 20.5, -30, positive\n\n1 2 3 neg\n4,5,6,+\n7,8,9,0");
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.points.map((p) => p.role), ["positive", "negative", "positive", "negative"]);
+  assert.deepEqual(ok.points[1].lps, [1, 2, 3]);
+  for (const [text, re] of [["1,2,3", /1 行目.*4 項目/], ["1,2,x,positive", /1 行目.*座標/], ["1,2,3,maybe", /1 行目.*役割/], ["1,2,3,positive\n1,2", /2 行目/]]) {
+    const r = parsePoints(text);
+    assert.equal(r.ok, false, text);
+    assert.match(r.error, re);
+  }
+});
+
+test("promptProblem: vista3d の組み合わせ（複数ラベル＋点、腎臓・肺・骨＋点、陽性なし）を止める", () => {
+  const pos = [{ role: "positive" }];
+  assert.equal(promptProblem("vista3d", [3], pos), null);
+  assert.equal(promptProblem("vista3d", [1, 3], []), null, "点が無ければ複数ラベルでよい");
+  assert.equal(promptProblem("vista3d", [], []), null, "全自動");
+  assert.match(promptProblem("vista3d", [1, 3], pos), /1 つまで/);
+  assert.match(promptProblem("vista3d", [2], pos), /腎臓・肺・骨/);
+  assert.match(promptProblem("vista3d", [20], pos), /腎臓・肺・骨/);
+  assert.match(promptProblem("vista3d", [], [{ role: "negative" }]), /陽性/);
+  assert.match(promptProblem("spleen_deepedit_annotation", [3], []), /ラベル番号を受け取りません/);
+  assert.equal(promptProblem("spleen_ct_segmentation", [3], pos), null, "対象外のモデルはここでは止めない（計算機側が止める）");
+});
+
+test("buildPrompt / vistaLabelOptions / roiToLps", () => {
+  assert.equal(buildPrompt("vista3d", [], []), null);
+  assert.equal(buildPrompt("spleen_ct_segmentation", [1], []), null);
+  assert.deepEqual(buildPrompt("vista3d", [3], [{ lps: [1, 2, 3], role: "positive" }]), { labels: [3], points: [{ lps: [1, 2, 3], role: "positive" }] });
+  const opts = vistaLabelOptions(ZOO.entries.find((e) => e.name === "vista3d"));
+  assert.equal(opts.length, 132);
+  assert.deepEqual(opts[2], { value: 3, name: "spleen" });
+  // index (col,row,slice) → LPS。indexToWorld は row-major 4x4
+  const vol = { dims: [4, 4, 4], indexToWorld: [0.7, 0, 0, -100, 0, 0.8, 0, -120, 0, 0, 2.5, 50, 0, 0, 0, 1] };
+  assert.deepEqual(roiToLps({ points: [[3, 2]], sliceIndex: 1 }, vol).map((v) => +v.toFixed(3)), [-97.9, -118.4, 52.5]);
+});
+
+/** ラベル番号・点つきの往復（偽の MONAI）。cfg は Bundle の設定、prompt は画面から来る入力 */
+function runPrompt(cfg, prompt, evaluatorSrc = null, extraEnv = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
+  try {
+    const lib = path.join(dir, "lib");
+    for (const [p, body] of Object.entries(FAKE_MONAI)) {
+      fs.mkdirSync(path.dirname(path.join(lib, p)), { recursive: true });
+      fs.writeFileSync(path.join(lib, p), body);
+    }
+    const bundle = path.join(dir, "bundle");
+    fs.mkdirSync(path.join(bundle, "configs"), { recursive: true });
+    fs.writeFileSync(path.join(bundle, "configs", "metadata.json"), JSON.stringify(spleenMeta));
+    fs.writeFileSync(path.join(bundle, "configs", "inference.json"), JSON.stringify(cfg));
+    if (evaluatorSrc !== null) {
+      fs.mkdirSync(path.join(bundle, "scripts"), { recursive: true });
+      fs.writeFileSync(path.join(bundle, "scripts", "evaluator.py"), evaluatorSrc);
+    }
+    const run = path.join(dir, "run");
+    fs.mkdirSync(run);
+    const env = {
+      ...process.env,
+      PYTHONPATH: [lib, process.env.GRAPHY_TEST_PYTHONPATH].filter(Boolean).join(path.delimiter),
+      FAKE_BUNDLE_SRC: bundle, FAKE_MODE: "same", WANT_NO_WEIGHTS_ONLY: "1", FAKE_MODALITY: "CT", ...extraEnv,
+      HOME: dir, USERPROFILE: dir, PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8",
+    };
+    delete env.COLAB_RELEASE_TAG;
+    delete env.TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD;
+    const make = spawnSync(PYTHON, ["-c", MAKE_INPUT], { cwd: run, env, encoding: "utf8" });
+    assert.equal(make.status, 0, make.stderr);
+    const r = spawnSync(PYTHON, ["-c", buildScript({ name: "fake_bundle" }, {}, 1, prompt)], { cwd: run, env, encoding: "utf8" });
+    const f = path.join(run, "prompt-kw.json");
+    const kw = fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
+    const lj = path.join(run, "outputs", "labels.json");
+    const ev = path.join(dir, "bundles", "fake_bundle", "scripts", "evaluator.py");
+    return { r, kw, summary: fs.existsSync(lj) ? JSON.parse(fs.readFileSync(lj, "utf8")) : null, evaluator: fs.existsSync(ev) ? fs.readFileSync(ev, "utf8") : null, dir };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// 目印のボクセル（x=3, y=2, z=1）の患者座標。MAKE_INPUT の格子（間隔 0.7/0.8/2.5、原点 (-100,-120,50)、x 軸は 30°回転）
+const lpsOf = (x, y, z) => {
+  const c = Math.cos(Math.PI / 6), s = Math.sin(Math.PI / 6);
+  return [-100 + x * 0.7 * c - y * 0.8 * s, -120 + x * 0.7 * s + y * 0.8 * c, 50 + z * 2.5];
+};
+const VISTA_CFG = { input_dict: "${'image': 'x.nii.gz'}", output_dir: "x", run: ["$@evaluator.run()"], preprocessing: { transforms: [{ _target_: "LoadImaged", keys: "image" }] } };
+const DEEPEDIT_CFG = { label_names: { spleen: 1, background: 0 }, datalist: [], output_dir: "x", run: ["$@evaluator.run()"], preprocessing: { transforms: [{ _target_: "AddGuidanceFromPointsDeepEditd", ref_image: "image" }] } };
+
+test("PY prompt (vista3d): ラベルと点が input_dict に、点は元の画像の添字で入る", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const { r, kw, summary } = runPrompt(VISTA_CFG, { labels: [3], points: [{ lps: lpsOf(3, 2, 1), role: "positive" }, { lps: lpsOf(7, 5, 4), role: "negative" }] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(path.basename(kw.input_dict.image), "image.nii.gz");
+  assert.deepEqual(kw.input_dict.label_prompt, [3]);
+  assert.deepEqual(kw.input_dict.points, [[3, 2, 1], [7, 5, 4]]);
+  assert.deepEqual(kw.input_dict.point_labels, [1, 0]);
+  assert.deepEqual(summary.prompt.points.map((p) => p.index), [[3, 2, 1], [7, 5, 4]]);
+  // 何も渡さない（全自動）ときは画像だけ
+  const auto = runPrompt(VISTA_CFG, null);
+  assert.equal(auto.r.status, 0, auto.r.stderr);
+  assert.deepEqual(Object.keys(auto.kw.input_dict), ["image"]);
+});
+
+test("PY prompt (DeepEdit): 陽性は前景の名前、陰性は background に入る", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const { r, kw } = runPrompt(DEEPEDIT_CFG, { labels: [], points: [{ lps: lpsOf(3, 2, 1), role: "positive" }, { lps: lpsOf(7, 5, 4), role: "negative" }] });
+  assert.equal(r.status, 0, r.stderr);
+  const d = kw["dataset#data"][0];
+  assert.equal(path.basename(d.image), "image.nii.gz");
+  assert.deepEqual(d.spleen, [[3, 2, 1]]);
+  assert.deepEqual(d.background, [[7, 5, 4]]);
+  const none = runPrompt(DEEPEDIT_CFG, null);
+  assert.equal(none.r.status, 0, none.r.stderr);
+  assert.deepEqual(none.kw["dataset#data"][0].spleen, []);
+});
+
+test("PY prompt: 画像の外の点、受け取らないモデル、DeepEdit にラベル番号は止める", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const out = runPrompt(VISTA_CFG, { labels: [], points: [{ lps: lpsOf(50, 2, 1), role: "positive" }] });
+  assert.notEqual(out.r.status, 0);
+  assert.match(out.r.stderr, /prompt-outside/);
+  assert.equal(out.kw, null, "推論に進まない");
+  const plain = runPrompt({ datalist: [], output_dir: "x", run: ["$@evaluator.run()"] }, { labels: [3], points: [] });
+  assert.notEqual(plain.r.status, 0);
+  assert.match(plain.r.stderr, /prompt-unsupported/);
+  assert.equal(plain.kw, null);
+  const lab = runPrompt(DEEPEDIT_CFG, { labels: [1], points: [] });
+  assert.notEqual(lab.r.status, 0);
+  assert.match(lab.r.stderr, /prompt-unsupported/);
+  // 正例: 同じ設定で点が画像の中なら通る（負例が別の理由で落ちていないことの裏）
+  assert.equal(runPrompt(VISTA_CFG, { labels: [], points: [{ lps: lpsOf(3, 2, 1), role: "positive" }] }).r.status, 0);
+});
+
+test("PY prompt: vista3d の点だけ evaluator の型を揃える（点が無ければ触らない、一致する行が無ければ何もしない）", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const SRC = "x = 1\n                points = torch.from_numpy(points).to(inputs.device)\n";
+  const pts = { labels: [3], points: [{ lps: lpsOf(3, 2, 1), role: "positive" }] };
+  const patched = runPrompt(VISTA_CFG, pts, SRC);
+  assert.equal(patched.r.status, 0, patched.r.stderr);
+  assert.equal(patched.summary.bundleCodePatched.length, 1);
+  assert.match(patched.summary.bundleCodePatched[0], /from_numpy.*as_tensor/);
+  const noPts = runPrompt(VISTA_CFG, { labels: [3], points: [] }, SRC);
+  assert.equal(noPts.r.status, 0, noPts.r.stderr);
+  assert.deepEqual(noPts.summary.bundleCodePatched, [], "点が無ければ Bundle のコードは変えない");
+  const other = runPrompt(VISTA_CFG, pts, "points = something_else(points)\n");
+  assert.equal(other.r.status, 0, other.r.stderr);
+  assert.deepEqual(other.summary.bundleCodePatched, [], "一致する行が無ければ何もしない");
+});
+
+test("PY prompt: 点があるとき 255（点の窓の外）は背景にして数を返す。点が無ければそのまま", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const pts = { labels: [3], points: [{ lps: lpsOf(3, 2, 1), role: "positive" }] };
+  const withPts = runPrompt(VISTA_CFG, pts, null, { FAKE_NOT_INFERRED: "1" });
+  assert.equal(withPts.r.status, 0, withPts.r.stderr);
+  assert.equal(withPts.summary.labels["255"], undefined, "255 は臓器として返さない");
+  assert.equal(withPts.summary.notInferredVoxels, 6, "x=0, y=0 の z 方向 6 ボクセル（偽の出力が lab[0, 0, :] に 255 を置く）");
+  const noPts = runPrompt(VISTA_CFG, { labels: [3], points: [] }, null, { FAKE_NOT_INFERRED: "1" });
+  assert.equal(noPts.r.status, 0, noPts.r.stderr);
+  assert.equal(noPts.summary.labels["255"], 6, "点が無いときは触らない");
+  assert.equal(noPts.summary.notInferredVoxels, 0);
 });
