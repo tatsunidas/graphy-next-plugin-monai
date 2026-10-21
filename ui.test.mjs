@@ -579,3 +579,12 @@ test("PY multi-channel stops when the grids differ, the channel count is wrong o
   // 正例: 同じ入力は通る（上の負例が、検査ではなく別の理由で落ちていないことの裏）
   assert.equal(runMulti({ layout: "one-key" }).r.status, 0);
 });
+
+test("channelNameMatches: T1 は T1c に一致しない（語の境界）", async () => {
+  const { channelNameMatches } = await import("./ui.js");
+  assert.equal(channelNameMatches("BRATS_001_T1", "T1"), true);
+  assert.equal(channelNameMatches("BRATS_001_T1c", "T1"), false, "負例: T1 が T1c に一致してはならない");
+  assert.equal(channelNameMatches("BRATS_001_T1c", "T1c"), true);
+  assert.equal(channelNameMatches("flair axial", "FLAIR"), true);
+  assert.equal(channelNameMatches("T2star", "T2"), false);
+});

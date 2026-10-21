@@ -72,6 +72,11 @@ export function loadKeysOf(inference) {
   return inference && typeof inference === "object" ? walk(inference) : [];
 }
 
+/** シリーズ名にチャネル名が語として入っているか（"T1" が "T1c" に一致しないように、前後が英数字でないときだけ）。 */
+export function channelNameMatches(label, name) {
+  const esc = String(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp("(^|[^A-Za-z0-9])" + esc + "(?![A-Za-z0-9])", "i").test(String(label));
+}
 /**
  * 複数チャネルの入力の並び。順序が Bundle に書かれているときだけ出す（取り違えると結果が壊れる）。
  * 1 チャネル（または入力の形式が無い）なら null。順序が分からなければ order = "unknown"。
@@ -1006,13 +1011,14 @@ export async function activate(host) {
     channelsBox.style.display = plan ? "flex" : "none";
     chanSels = [];
     if (!plan) { runBtn.disabled = state.phase === "running"; return; }
-    tiles = (host.getTargets?.() ?? []).filter((t) => t.kind === "image" && t.patientKey === target.patientKey);
+    const allTargets = host.getTargets?.() ?? [];
+    tiles = allTargets.filter((t) => t.kind === "image" && t.patientKey === target.patientKey);
     const rows = [el("div", { style: "font-weight: 600" }, `このモデルは ${plan.n} 本のシリーズを重ねて入力します（並びは ${plan.order === "metadata" ? "Bundle の metadata" : "Bundle の設定（inference.json）"} の定義です）`)];
     plan.names.forEach((nm, i) => {
       const sel = el("select", { testid: `monai-channel-${i}`, style: "flex: 1; min-width: 0" },
         el("option", { value: "", textContent: "— シリーズを選んでください —" }),
         ...tiles.map((t) => el("option", { value: t.tileId, textContent: tileLabel(t) })));
-      const hint = tiles.filter((t) => t.seriesLabel.toLowerCase().includes(nm.toLowerCase()));
+      const hint = tiles.filter((t) => channelNameMatches(t.seriesLabel, nm));
       if (hint.length === 1) sel.value = hint[0].tileId;
       sel.addEventListener("change", syncChannelNote);
       chanSels.push(sel);
@@ -1020,7 +1026,7 @@ export async function activate(host) {
     });
     const reload = el("button", { textContent: "開いているタイルを読み直す", testid: "monai-channels-reload", style: "align-self: flex-start" });
     reload.addEventListener("click", fillChannels);
-    rows.push(channelNote, el("div", { style: "font-size: 11px; color: #52606d" }, "シリーズは、同じ患者の画像タイルとして開いておいてください。"), reload);
+    rows.push(channelNote, el("div", { style: "font-size: 11px; color: #52606d" }, `シリーズは、同じ患者の画像タイルとして開いておいてください（ビューアのタイル ${allTargets.length} 枚のうち、選べるのは ${tiles.length} 枚）。`), reload);
     channelsBox.replaceChildren(...rows);
     syncChannelNote();
   };
