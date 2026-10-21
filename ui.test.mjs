@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { NOT_YET, RAN, REFRESH_PY, ZOO, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
+import { NOT_YET, RAN, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -103,15 +103,15 @@ test("every Bundle that already ran on Colab is in the snapshot and usable for i
 });
 
 // 実物の metadata.json（2026-10-20 取得）に judge を当てた結果。件数が変わったら、中身を見て更新する
-test("classify on the real zoo: CT 7 usable, MR 3 usable; generative / multi-channel / classification stop", () => {
+test("classify on the real zoo: CT 8 usable, MR 4 usable; generative / classification / point-prompt stop", () => {
   const usable = (mod) => ZOO.entries.filter((e) => ["ran", "untested"].includes(classify(e, mod).kind)).map((e) => e.name).sort();
   assert.deepEqual(usable("CT"), [
     "multi_organ_segmentation", "pancreas_ct_dints_segmentation", "pediatric_abdominal_ct_segmentation",
-    "renalStructures_UNEST_segmentation", "spleen_ct_segmentation", "swin_unetr_btcv_segmentation", "wholeBody_ct_segmentation",
+    "renalStructures_CECT_segmentation", "renalStructures_UNEST_segmentation", "spleen_ct_segmentation", "swin_unetr_btcv_segmentation", "wholeBody_ct_segmentation",
   ].sort());
-  assert.deepEqual(usable("MR"), ["prostate_mri_anatomy", "ventricular_short_axis_3label", "wholeBrainSeg_Large_UNEST_segmentation"]);
-  for (const n of ["maisi_ct_generative", "brats_mri_segmentation", "breast_density_classification", "lung_nodule_ct_detection", "vista2d"]) {
-    const c = classify(ZOO.entries.find((e) => e.name === n), n.startsWith("brats") ? "MR" : "CT");
+  assert.deepEqual(usable("MR"), ["brats_mri_segmentation", "prostate_mri_anatomy", "ventricular_short_axis_3label", "wholeBrainSeg_Large_UNEST_segmentation"]);
+  for (const n of ["maisi_ct_generative", "breast_density_classification", "lung_nodule_ct_detection", "vista2d", "spleen_deepedit_annotation"]) {
+    const c = classify(ZOO.entries.find((e) => e.name === n), "CT");
     assert.equal(c.kind, "stopped", n);
     assert.ok(c.reasons.length >= 1, n);
   }
@@ -210,15 +210,17 @@ test("colorFor gives distinct colors for neighbours", () => {
 
 test("buildScript embeds only the bundle settings and passes the code inspector limits", () => {
   assert.throws(() => buildScript({ name: "x'; import os" }), /bad-bundle-name/);
+  assert.throws(() => buildScript({ name: "spleen_ct_segmentation" }, {}, 9), /bad-channels/);
+  assert.throws(() => buildScript({ name: "spleen_ct_segmentation" }, {}, 0), /bad-channels/);
   assert.equal(validBundleName("MONAI/spleen_ct_segmentation"), true);
   assert.equal(validBundleName("../etc"), false);
   assert.equal(validBundleName(".."), false);
-  const code = buildScript({ name: "spleen_ct_segmentation" }, { highres: false });
+  const code = buildScript({ name: "wholeBody_ct_segmentation" }, { "displayable_configs#highres": false });
   assert.ok(code.length < 64 * 1024);
   // CodeInspector: base64 風の 200 文字以上・数字の 400 文字以上の連なりがあると「埋め込みデータ」とみなされる
   assert.equal(/[A-Za-z0-9+/=_-]{200,}/.test(code), false);
   assert.equal(/[0-9.,\s-]{400,}/.test(code), false);
-  assert.match(code.split("\n")[0], /^GRAPHY = __import__\('json'\)\.loads\(".*spleen_ct_segmentation.*"\)$/);
+  assert.match(code.split("\n")[0], /^GRAPHY = __import__\('json'\)\.loads\(".*wholeBody_ct_segmentation.*displayable_configs#highres.*"\)$/);
 });
 
 // ---------------------------------------------------------------------------
@@ -257,7 +259,7 @@ def download(name, bundle_dir, source, progress=True, version=None, repo=None):
     shutil.copytree(os.environ['FAKE_BUNDLE_SRC'], os.path.join(bundle_dir, name))
 
 
-def run(config_file, meta_file, bundle_root, datalist, dataset_dir, output_dir, logging_file=None, run_id='run', **kw):
+def run(config_file, meta_file, bundle_root, dataset_dir, output_dir, datalist=None, logging_file=None, run_id='run', **kw):
     cfg = json.load(open(config_file))
     assert run_id in cfg, ('run id', run_id, list(cfg))
     net = cfg.get('network_def')
@@ -265,8 +267,17 @@ def run(config_file, meta_file, bundle_root, datalist, dataset_dir, output_dir, 
         assert 'img_size' not in net, 'img_size should have been dropped'
         assert net['in_channels'] == 1
     import nibabel as nib
+    if datalist is None:
+        datalist = kw['test_datalist']
+    json.dump(datalist, open(os.path.join(os.getcwd(), 'datalist.json'), 'w'))
     first = datalist[0]
-    if os.environ.get('FAKE_DICT_DATALIST'):
+    if os.environ.get('FAKE_MULTI'):
+        assert isinstance(first, dict), ('want dict datalist', datalist)
+        first = list(first.values())[0]
+        first = first[0] if isinstance(first, list) else first
+    if os.environ.get('FAKE_MULTI'):
+        pass
+    elif os.environ.get('FAKE_DICT_DATALIST'):
         assert isinstance(first, dict) and 'image' in first, ('want dict datalist', datalist)
         first = first['image']
     else:
@@ -302,6 +313,12 @@ np.save('expected.npy', ((vol > 500).astype(np.uint8) + (vol > 1500).astype(np.u
 import zipfile
 with zipfile.ZipFile('inputs/0.npz', 'a') as zf:
     zf.writestr('meta.json', json.dumps({'format': 'graphy-npz/1', 'modality': os.environ.get('FAKE_MODALITY', 'CT')}))
+for i in range(1, int(os.environ.get('FAKE_NCH', '1'))):
+    v2 = vol[:, :, :-1] if os.environ.get('FAKE_BAD_GRID') == str(i) else vol
+    np.savez('inputs/%d.npz' % i, volume=v2, spacing=np.array([2.5, 0.8, 0.7]), origin=np.array([-100.0, -120.0, 50.0]),
+             direction=np.array([[c, s, 0], [-s, c, 0], [0, 0, 1.0]]))
+    with zipfile.ZipFile('inputs/%d.npz' % i, 'a') as zf:
+        zf.writestr('meta.json', json.dumps({'format': 'graphy-npz/1', 'modality': os.environ.get('FAKE_MODALITY_%d' % i, os.environ.get('FAKE_MODALITY', 'CT'))}))
 `;
 
 for (const mode of ["same", "flip", "onehot", "dict-datalist", "third-party"]) {
@@ -435,4 +452,139 @@ test("PY stops before inference when the series does not fit, but still returns 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("settingFields builds parts from displayable_configs with the #-path keys", () => {
+  const wb = ZOO.entries.find((e) => e.name === "wholeBody_ct_segmentation");
+  const f = settingFields(wb.displayable);
+  assert.deepEqual(f.map((x) => [x.key, x.kind, x.def]), [
+    ["displayable_configs#highres", "bool", true],
+    ["displayable_configs#sw_overlap", "number", 0.25],
+    ["displayable_configs#sw_batch_size", "int", 1],
+  ]);
+  assert.deepEqual(settingFields(null), []);
+  // wholeBody 以外に displayable_configs を持つ Bundle は無い（35 本の実物）
+  assert.deepEqual(ZOO.entries.filter((e) => e.displayable).map((e) => e.name), ["wholeBody_ct_segmentation"]);
+});
+
+test("settingOverrides passes only changed values and rejects bad ones", () => {
+  const f = settingFields({ highres: true, sw_overlap: 0.25, sw_batch_size: 1 });
+  assert.deepEqual(settingOverrides(f, { highres: true, sw_overlap: "0.25", sw_batch_size: "1" }), { ok: true, overrides: {} });
+  assert.deepEqual(settingOverrides(f, { highres: false, sw_overlap: "0.5" }), {
+    ok: true, overrides: { "displayable_configs#highres": false, "displayable_configs#sw_overlap": 0.5 },
+  });
+  for (const bad of [{ sw_overlap: "" }, { sw_overlap: "abc" }, { sw_batch_size: "1.5" }, { highres: "false" }, { sw_overlap: "Infinity" }]) {
+    assert.equal(settingOverrides(f, bad).ok, false, JSON.stringify(bad));
+  }
+});
+
+test("channelPlan reads the channel order from metadata, else from the LoadImaged keys, else says unknown", () => {
+  const e = (n) => ZOO.entries.find((x) => x.name === n);
+  assert.deepEqual(channelPlan(e("brats_mri_segmentation")), { n: 4, names: ["T1c", "T1", "T2", "FLAIR"], order: "metadata" });
+  assert.deepEqual(channelPlan(e("renalStructures_CECT_segmentation")), { n: 3, names: ["artery", "vein", "excret"], order: "inference" });
+  assert.equal(channelPlan(e("spleen_deepedit_annotation")).order, "unknown");
+  assert.equal(channelPlan(e("spleen_ct_segmentation")), null);
+  // 1 チャネルの Bundle に複数シリーズを渡すと止まる／複数チャネルに 1 本だと止まる
+  const brats = e("brats_mri_segmentation");
+  assert.equal(judge({ network_data_format: { inputs: { image: { modality: "MR", num_channels: 4 } }, outputs: { pred: { format: "segmentation" } } } }, { modality: "MR", channels: 1 }).ok, false);
+  assert.equal(classify(brats, "MR").kind, "untested");
+  assert.equal(classify(brats, "CT").kind, "stopped");
+});
+
+test("loadKeysOf resolves @refs and drops label", () => {
+  assert.deepEqual(loadKeysOf({ image_key: "image", preprocessing: { transforms: [{ _target_: "LoadImaged", keys: "@image_key" }] } }), ["image"]);
+  assert.deepEqual(loadKeysOf({ p: { transforms: [{ _target_: "LoadImaged", keys: ["artery", "vein", "excret", "label"] }] } }), ["artery", "vein", "excret"]);
+  assert.deepEqual(loadKeysOf({}), []);
+  assert.deepEqual(loadKeysOf(null), []);
+});
+
+test("brats label names follow the post-processing values 1, 2, 4", () => {
+  assert.deepEqual(Object.keys(LABEL_NAMES.brats_mri_segmentation), ["1", "2", "4"]);
+});
+
+const multiMeta = (n) => ({
+  version: "1.0.0",
+  network_data_format: {
+    inputs: { image: { type: "image", format: "magnitude", modality: "CT", num_channels: n, channel_def: { 0: "a", 1: "b" } } },
+    outputs: { pred: { type: "image", format: "segmentation", channel_def: { 0: "background", 1: "spleen" } } },
+  },
+});
+
+/** 複数チャネルの往復（偽の MONAI）。入力の形は Bundle の設定の LoadImaged のキーで決まる。 */
+function runMulti({ layout, nch = 2, metaCh = 2, badGrid = "", modality1 = "" }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
+  try {
+    const lib = path.join(dir, "lib");
+    for (const [p, body] of Object.entries(FAKE_MONAI)) {
+      fs.mkdirSync(path.dirname(path.join(lib, p)), { recursive: true });
+      fs.writeFileSync(path.join(lib, p), body);
+    }
+    const bundle = path.join(dir, "bundle");
+    fs.mkdirSync(path.join(bundle, "configs"), { recursive: true });
+    fs.writeFileSync(path.join(bundle, "configs", "metadata.json"), JSON.stringify(multiMeta(metaCh)));
+    const cfg = layout === "one-key"
+      ? { image_key: "image", test_datalist: "$load()", output_dir: "x", run: ["$@evaluator.run()"], preprocessing: { transforms: [{ _target_: "LoadImaged", keys: "@image_key" }] } }
+      : { datalist: [], output_dir: "x", run: ["$@evaluator.run()"], preprocessing: { transforms: [{ _target_: "LoadImaged", keys: ["a", "b", "label"] }] } };
+    fs.writeFileSync(path.join(bundle, "configs", "inference.json"), JSON.stringify(cfg));
+    const run = path.join(dir, "run");
+    fs.mkdirSync(run);
+    const env = {
+      ...process.env,
+      PYTHONPATH: [lib, process.env.GRAPHY_TEST_PYTHONPATH].filter(Boolean).join(path.delimiter),
+      FAKE_BUNDLE_SRC: bundle, FAKE_MODE: "same", FAKE_MULTI: "1", WANT_NO_WEIGHTS_ONLY: "1",
+      FAKE_NCH: String(nch), FAKE_BAD_GRID: badGrid, FAKE_MODALITY: "CT", FAKE_MODALITY_1: modality1 || "CT",
+      HOME: dir, USERPROFILE: dir, PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8",
+    };
+    delete env.COLAB_RELEASE_TAG;
+    delete env.TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD;
+    const make = spawnSync(PYTHON, ["-c", MAKE_INPUT], { cwd: run, env, encoding: "utf8" });
+    assert.equal(make.status, 0, make.stderr);
+    const script = buildScript({ name: "fake_bundle" }, {}, nch);
+    const r = spawnSync(PYTHON, ["-c", script], { cwd: run, env, encoding: "utf8" });
+    const dl = fs.existsSync(path.join(run, "datalist.json")) ? JSON.parse(fs.readFileSync(path.join(run, "datalist.json"), "utf8")) : null;
+    return { r, dl, base: path.basename };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("PY multi-channel: one LoadImaged key gets the list of channel files in order", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const { r, dl } = runMulti({ layout: "one-key" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(dl.length, 1);
+  assert.deepEqual(Object.keys(dl[0]), ["image"]);
+  assert.deepEqual(dl[0].image.map((p) => path.basename(p)), ["image.nii.gz", "image_1.nii.gz"]);
+});
+
+test("PY multi-channel: one key per channel are assigned in the order of the series", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const { r, dl } = runMulti({ layout: "per-key" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(Object.keys(dl[0]), ["a", "b"]);
+  assert.deepEqual(Object.values(dl[0]).map((p) => path.basename(p)), ["image.nii.gz", "image_1.nii.gz"]);
+});
+
+test("PY multi-channel stops when the grids differ, the channel count is wrong or the modalities differ", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const grid = runMulti({ layout: "one-key", badGrid: "1" });
+  assert.notEqual(grid.r.status, 0);
+  assert.match(grid.r.stderr, /grid-mismatch/);
+  assert.equal(grid.dl, null);
+  const count = runMulti({ layout: "one-key", nch: 3 });
+  assert.notEqual(count.r.status, 0);
+  assert.match(count.r.stderr, /not-applicable.*チャネル数が 2/);
+  assert.equal(count.dl, null);
+  const mod = runMulti({ layout: "one-key", modality1: "MR" });
+  assert.notEqual(mod.r.status, 0);
+  assert.match(mod.r.stderr, /not-applicable.*モダリティ/);
+  assert.equal(mod.dl, null);
+  // 正例: 同じ入力は通る（上の負例が、検査ではなく別の理由で落ちていないことの裏）
+  assert.equal(runMulti({ layout: "one-key" }).r.status, 0);
+});
+
+test("channelNameMatches: T1 は T1c に一致しない（語の境界）", async () => {
+  const { channelNameMatches } = await import("./ui.js");
+  assert.equal(channelNameMatches("BRATS_001_T1", "T1"), true);
+  assert.equal(channelNameMatches("BRATS_001_T1c", "T1"), false, "負例: T1 が T1c に一致してはならない");
+  assert.equal(channelNameMatches("BRATS_001_T1c", "T1c"), true);
+  assert.equal(channelNameMatches("flair axial", "FLAIR"), true);
+  assert.equal(channelNameMatches("T2star", "T2"), false);
 });

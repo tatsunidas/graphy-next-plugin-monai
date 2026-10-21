@@ -37,6 +37,11 @@ GRAPHY-Next の 2D ビューアから、[MONAI Model Zoo](https://monai.io/model
 | prostate_mri_anatomy | T2 MR | 前立腺 | 4.0 GB |
 | wholeBrainSeg_Large_UNEST_segmentation | T1 MR（MNI 空間） | 脳 133 領域 | 11.5 GB |
 
+### 画像のほかに渡せる入力
+- **設定値**（wholeBody_ct_segmentation の `highres`・`sw_overlap`・`sw_batch_size`）: Bundle が「画面に出してよい設定」として持つ値を、型に合わせた部品で出します。既定と違う値だけを計算機へ送ります。範囲が Bundle に書かれていない値は「範囲不明」と出します。Colab（T4）で `highres` の true／false を走らせ、Bundle 側の `pixdim` と `modelname` が切り替わることを確かめました（2026-10-21）。
+- **複数チャネル**（brats_mri_segmentation の 4 本: T1c, T1, T2, FLAIR の順。renalStructures_CECT_segmentation の 3 本: artery, vein, excret）: チャネルごとにシリーズを選びます。**プラグインを開く前に、同じ患者のシリーズをタイルで開いておいてください**（開いた時点のタイルしか見えません）。未選択・重複・モダリティ違い・枚数違い・格子違いは、実行を止めて理由を出します。brats は MSD Task01 の 3 症例で完走し、Dice を報告値と比べました（`docs/monai-verification.md`）。renalStructures_CECT は実機で未確認です。
+- 点やラベルの指定が要るモデル（vista3d、spleen_deepedit_annotation）は未対応です（一覧で「未検証」）。
+
 一覧に無い Bundle も「その他」から名前で指定できます（Model Zoo の名前、または Hugging Face の `組織/名前`）。
 
 ⚠ モデルの説明は作者の自己申告です。止めるのは明らかに合わないとき（モダリティ・チャネル数・出力の種類）だけなので、結果は必ず画像で確かめてください。
