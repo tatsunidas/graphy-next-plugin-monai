@@ -40,7 +40,10 @@ GRAPHY-Next の 2D ビューアから、[MONAI Model Zoo](https://monai.io/model
 ### 画像のほかに渡せる入力
 - **設定値**（wholeBody_ct_segmentation の `highres`・`sw_overlap`・`sw_batch_size`）: Bundle が「画面に出してよい設定」として持つ値を、型に合わせた部品で出します。既定と違う値だけを計算機へ送ります。範囲が Bundle に書かれていない値は「範囲不明」と出します。Colab（T4）で `highres` の true／false を走らせ、Bundle 側の `pixdim` と `modelname` が切り替わることを確かめました（2026-10-21）。
 - **複数チャネル**（brats_mri_segmentation の 4 本: T1c, T1, T2, FLAIR の順。renalStructures_CECT_segmentation の 3 本: artery, vein, excret）: チャネルごとにシリーズを選びます。**プラグインを開く前に、同じ患者のシリーズをタイルで開いておいてください**（開いた時点のタイルしか見えません）。未選択・重複・モダリティ違い・枚数違い・格子違いは、実行を止めて理由を出します。brats は MSD Task01 の 3 症例で完走し、Dice を報告値と比べました（`docs/monai-verification.md`）。renalStructures_CECT は実機で未確認です。
-- 点やラベルの指定が要るモデル（vista3d、spleen_deepedit_annotation）は未対応です（一覧で「未検証」）。
+- **ラベル番号と点**（vista3d、spleen_deepedit_annotation）: 点は 1 行 1 点「x, y, z, positive|negative」（患者座標 LPS, mm）で入力欄に書きます。「点 ROI から読み込む」で、置いた点 ROI を座標に直して入力欄へ足せます（ROI のラベルが negative で始まるものは陰性、それ以外は陽性。座標は見て直せます。**この読み込みは実機で未確認**）。
+  - vista3d: ラベル（132 件から選ぶ）と点の両方が空なら全自動（117 クラス）。点を使うときはラベルは 1 つまで、腎臓・肺・骨（2・20・21）は点と一緒に使えません（Bundle の仕様）。点があると、点の窓の外は「未推論」として背景にし、その数を画面に出します（vista3d は推論していない所を 255 で返すため）。
+  - DeepEdit: 陽性は前景（spleen）、陰性は background として渡します。点が無くても走ります。
+  - 実機で、vista3d の点を使う経路は Bundle のコード 1 行（`torch.from_numpy(points)`）が今の MONAI で落ちるため、型だけを揃える手当て（`as_tensor`）を計算機の上で当てます（当てた箇所は結果に残ります）。
 
 一覧に無い Bundle も「その他」から名前で指定できます（Model Zoo の名前、または Hugging Face の `組織/名前`）。
 

@@ -44,10 +44,89 @@ const JA = {
 };
 
 /** 判定は通るが、いまの実行コードでは動かない見込みのもの（理由つき）。選べない。 */
-export const NOT_YET = {
-  spleen_deepedit_annotation: "陽性・陰性のクリック点が要るモデルです。点を渡す画面がまだありません",
-  vista3d: "入力がプロンプト（ラベル番号・点）つきの辞書で、いまの実行コードは画像のパスの一覧しか渡せません",
+export const NOT_YET = {};
+
+/**
+ * 画像のほかに「どこを・何を」を渡すモデル。名前で引く（設定の形からは見分けられない）。
+ * labels = ラベル番号（vista3d の label_prompt）、points = 点（陽性・陰性）。
+ */
+export const PROMPTS = {
+  vista3d: { labels: true, points: true },
+  // 入力のチャネル数 3 = 画像 1 + 点の信号 2（spleen・background）。画像として重ねるのは 1 本
+  spleen_deepedit_annotation: { labels: false, points: true, guidanceChannels: 2 },
 };
+
+/** vista3d で、点と一緒に指定できないラベル（Bundle が下位のラベルに分けるもの。docs/inference.md） */
+/** 点として読む ROI のツール名（本体の点 ROI と Probe） */
+export const POINT_TOOLS = ["GraphyPointROI", "Probe"];
+
+export const VISTA_NO_POINT_LABELS = [2, 20, 21];
+
+/**
+ * 点の入力（1 行 1 点）を読む。形式は「x, y, z, 役割」。座標は患者座標（LPS, mm）。
+ * 役割は positive / negative（+ / - / 1 / 0 も可）。空行と # で始まる行は読み飛ばす。
+ * @param {string} text
+ * @returns {{ ok: true, points: { lps: [number, number, number], role: "positive" | "negative" }[] } | { ok: false, error: string }}
+ */
+export function parsePoints(text) {
+  const points = [];
+  const lines = String(text ?? "").split(/\r?\n/);
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n].trim();
+    if (!line || line.startsWith("#")) continue;
+    const parts = line.split(/[\s,]+/).filter(Boolean);
+    if (parts.length !== 4) return { ok: false, error: `${n + 1} 行目: 「x, y, z, positive または negative」の 4 項目で書いてください` };
+    const xyz = parts.slice(0, 3).map(Number);
+    if (parts.slice(0, 3).some((p) => p === "") || xyz.some((v) => !Number.isFinite(v))) return { ok: false, error: `${n + 1} 行目: 座標が数ではありません` };
+    const r = parts[3].toLowerCase();
+    const role = ["positive", "pos", "+", "1"].includes(r) ? "positive" : ["negative", "neg", "-", "0"].includes(r) ? "negative" : null;
+    if (!role) return { ok: false, error: `${n + 1} 行目: 役割は positive か negative です` };
+    points.push({ lps: /** @type {[number, number, number]} */ (xyz), role });
+  }
+  return { ok: true, points };
+}
+
+/**
+ * 点 ROI（画素座標＋スライス）を患者座標（LPS, mm）へ。vol は loadVolume の結果（indexToWorld）。
+ * @param {{ points: Array<[number, number]>, sliceIndex: number }} roi
+ * @param {{ indexToWorld: number[], dims: [number, number, number] }} vol
+ */
+export function roiToLps(roi, vol) {
+  const [col, row] = roi.points[0];
+  const k = roi.sliceIndex;
+  const m = vol.indexToWorld;
+  return [0, 1, 2].map((r) => m[r * 4] * col + m[r * 4 + 1] * row + m[r * 4 + 2] * k + m[r * 4 + 3]);
+}
+
+/**
+ * プロンプト（ラベル番号と点）の組み合わせを検査する。止める理由を返す（無ければ null）。
+ * @param {string} bundleName
+ * @param {number[]} labels
+ * @param {{ role: string }[]} points
+ */
+export function promptProblem(bundleName, labels, points) {
+  const spec = PROMPTS[bundleName];
+  if (!spec) return null;
+  if (!spec.labels && labels.length) return "このモデルはラベル番号を受け取りません";
+  if (bundleName === "vista3d") {
+    if (points.length && labels.length > 1) return "点を使うときは、ラベルは 1 つまでです（複数ラベルと点は同時に渡せません）";
+    if (points.length && labels.some((l) => VISTA_NO_POINT_LABELS.includes(l))) return `ラベル ${VISTA_NO_POINT_LABELS.join("・")}（腎臓・肺・骨）は点と一緒に使えません。左右などの細かいラベルを選んでください`;
+    if (points.length && !points.some((p) => p.role === "positive")) return "点には、陽性（positive）を 1 つ以上入れてください";
+  }
+  return null;
+}
+
+/** 計算機へ送るプロンプト。何も無ければ null（vista3d は null なら全自動、deepedit は点なし） */
+export function buildPrompt(bundleName, labels, points) {
+  if (!PROMPTS[bundleName] || (!labels.length && !points.length)) return null;
+  return { labels, points: points.map((p) => ({ lps: p.lps, role: p.role })) };
+}
+
+/** vista3d のラベル選択肢（番号 → 名前）。metadata の出力の channel_def から、0 を除く */
+export function vistaLabelOptions(entry) {
+  const def = entry?.ndf?.outputs?.pred?.channel_def ?? {};
+  return Object.entries(def).filter(([k]) => Number(k) > 0).map(([k, v]) => ({ value: Number(k), name: String(v) }));
+}
 
 /**
  * 設定の LoadImaged が読む入力のキー（label は除く）。計算機側の load_keys と同じ規則。
@@ -84,7 +163,7 @@ export function channelNameMatches(label, name) {
  */
 export function channelPlan(entry) {
   const image = entry?.ndf?.inputs && (entry.ndf.inputs.image ?? Object.values(entry.ndf.inputs)[0]);
-  const n = Number(image?.num_channels ?? 1);
+  const n = Number(image?.num_channels ?? 1) - (PROMPTS[entry?.name]?.guidanceChannels ?? 0);
   if (!(n > 1)) return null;
   const def = image.channel_def && typeof image.channel_def === "object" ? image.channel_def : null;
   const byMeta = def ? Array.from({ length: n }, (_, i) => def[String(i)]) : [];
@@ -139,7 +218,7 @@ export function zooEntry(name, versions, metadata, inference) {
 /** 一覧の 1 行を、表示中のシリーズに対して分類する。 */
 export function classify(entry, modality) {
   const plan = channelPlan(entry);
-  const v = judge({ network_data_format: entry.ndf ?? undefined }, { modality, channels: plan ? plan.n : 1 });
+  const v = judge({ network_data_format: entry.ndf ?? undefined }, { modality, channels: plan ? plan.n : 1, guidanceChannels: PROMPTS[entry.name]?.guidanceChannels ?? 0 });
   const ran = RAN.names.includes(entry.name);
   if (!v.ok) return { kind: "stopped", reasons: v.reasons, verdict: v, ran };
   if (NOT_YET[entry.name]) return { kind: "stopped", reasons: [NOT_YET[entry.name]], verdict: v, ran };
@@ -163,6 +242,7 @@ from importlib import metadata as _md
 
 B = GRAPHY['bundle']
 OVR = GRAPHY.get('overrides') or {}
+PROMPT = GRAPHY.get('prompt') or {'labels': [], 'points': []}
 T0 = time.time()
 STAGES = {}
 
@@ -282,7 +362,7 @@ def norm(m):
     return 'MR' if u == 'MRI' else u
 
 
-def judge(meta, modality, channels=1):
+def judge(meta, modality, channels=1, guidance=0):
     """このシリーズに使えるか。止めるのは明らかに合わないときだけ（プラグインの judge と同じ規則）。"""
     reasons = []
     fmt = meta.get('network_data_format') or {}
@@ -293,7 +373,7 @@ def judge(meta, modality, channels=1):
         reasons.append('入力が %d つ要るモデルです（%s）。1 シリーズでは動かせません' % (len(ins), '・'.join(ins)))
     image = ins.get('image') or (next(iter(ins.values())) if ins else None)
     if image:
-        ch = int(image.get('num_channels') or 1)
+        ch = int(image.get('num_channels') or 1) - guidance
         if ch != channels:
             reasons.append('入力のチャネル数が %d です（選ばれたシリーズは %d 本）。チャネルの数だけシリーズを選んでください' % (ch, channels))
         want = [norm(x) for x in re.split(r'[/,\s]+', str(image.get('modality') or '')) if x]
@@ -417,6 +497,57 @@ def datalist_for(config, image_path):
     return [{'image': image_path}] if raw_use(config) else [image_path]
 
 
+def prompt_style(config):
+    """ラベル番号・点を辞書で受ける Bundle か。vista3d は input_dict、DeepEdit は点の変換（AddGuidanceFromPointsDeepEditd）。"""
+    return 'input_dict' in config or 'AddGuidanceFromPointsDeepEditd' in json.dumps(config, default=str)
+
+
+def prompt_inputs(config, prompt, image_path, lps, dims):
+    """Bundle へ渡す入力を作る。戻り値は（添字に直した点, run への上書き）。点は元の画像の添字（0 始まり）で、範囲の外は止める。"""
+    inv = np.linalg.inv(lps)
+    pts = []
+    for p in prompt.get('points') or []:
+        v = inv @ np.array([p['lps'][0], p['lps'][1], p['lps'][2], 1.0])
+        idx = [int(round(float(x))) for x in v[:3]]
+        if any(i < 0 or i >= d for i, d in zip(idx, dims)):
+            raise RuntimeError('prompt-outside: 点 %s（LPS mm）は画像の外です（添字 %s、大きさ %s）' % (p['lps'], idx, list(dims)))
+        pts.append((idx, 1 if p['role'] == 'positive' else 0))
+    labels = [int(x) for x in prompt.get('labels') or []]
+    if 'input_dict' in config:
+        d = {'image': image_path}
+        if labels:
+            d['label_prompt'] = labels
+        if pts:
+            d['points'] = [i for i, _ in pts]
+            d['point_labels'] = [r for _, r in pts]
+        return [{'index': i, 'role': r} for i, r in pts], {'input_dict': d}
+    names = list((config.get('label_names') or {}).keys())
+    fg = [n for n in names if n != 'background']
+    if labels or len(fg) != 1 or 'background' not in names:
+        raise RuntimeError('prompt-unsupported: DeepEdit の label_names（%s）が想定（前景 1 つと background）と違います' % names)
+    d = {'image': image_path}
+    for n in names:
+        d[n] = []
+    for i, r in pts:
+        d[fg[0] if r else 'background'].append(i)
+    return [{'index': i, 'role': r} for i, r in pts], {'dataset#data': [d]}
+
+
+def patch_bundle_code(root):
+    """vista3d の点（scripts/evaluator.py）: 今の MONAI では affine が Tensor のまま torch.from_numpy に渡って落ちる。
+    処理は変えず、型だけ揃える（ndarray でも Tensor でも通る）。一致する行が無ければ何もしない。戻り値は直した箇所の一覧。"""
+    p = os.path.join(root, 'scripts', 'evaluator.py')
+    old = 'points = torch.from_numpy(points).to(inputs.device)'
+    new = 'points = torch.as_tensor(np.asarray(points)).to(inputs.device)'
+    if not os.path.isfile(p):
+        return []
+    text = open(p, encoding='utf-8').read()
+    if old not in text:
+        return []
+    open(p, 'w', encoding='utf-8').write(text.replace(old, new))
+    return ['scripts/evaluator.py: ' + old + ' -> ' + new]
+
+
 root = fetch()
 meta_path = os.path.join(root, 'configs', 'metadata.json')
 meta = json.load(open(meta_path, encoding='utf-8'))
@@ -428,7 +559,7 @@ N_CH = int(GRAPHY.get('channels') or 1)
 zs = [np.load('inputs/%d.npz' % i) for i in range(N_CH)]
 metas = [json.loads(bytes(zz['meta.json'])) if 'meta.json' in zz.files else {} for zz in zs]
 series_meta = metas[0]
-reasons = judge(meta, series_meta.get('modality'), N_CH)
+reasons = judge(meta, series_meta.get('modality'), N_CH, int(GRAPHY.get('guidanceChannels') or 0))
 for i in range(1, N_CH):
     if norm(metas[i].get('modality')) != norm(series_meta.get('modality')):
         reasons.append('チャネル %d のモダリティ（%s）がチャネル 0（%s）と違います' % (i, metas[i].get('modality') or '不明', series_meta.get('modality') or '不明'))
@@ -511,6 +642,18 @@ cfg0 = parser.get()
 kw = dict(config_file=inf_path, meta_file=meta_path, bundle_root=root,
           dataset_dir=os.path.join(work, 'in'), output_dir=out_dir)
 kw[datalist_key(cfg0)] = datalist_multi(cfg0, image_paths) if N_CH > 1 else datalist_for(cfg0, image_path)
+# ラベル番号・点を受けるモデル（vista3d: input_dict、DeepEdit: dataset#data）。点は患者座標（LPS, mm）→ 元の画像の添字
+prompt_voxels = None
+bundle_patched = []
+if prompt_style(cfg0):
+    prompt_voxels, prompt_kw = prompt_inputs(cfg0, PROMPT, image_path, lps, (nx, ny, nz))
+    kw.update(prompt_kw)
+    if prompt_voxels:
+        bundle_patched = patch_bundle_code(root)
+        if bundle_patched:
+            print('compat: patched bundle code', bundle_patched, flush=True)
+elif PROMPT.get('labels') or PROMPT.get('points'):
+    raise RuntimeError('prompt-unsupported: このモデルはラベル番号・点を受け取れません')
 logging_conf = os.path.join(root, 'configs', 'logging.conf')
 if os.path.isfile(logging_conf):
     kw['logging_file'] = logging_conf
@@ -542,6 +685,8 @@ kw['run_id'] = run_id_of(config)
 RUNNER = '''
 import json, sys
 kw = json.load(open(sys.argv[1], encoding='utf-8'))
+# Bundle 自身の scripts/（vista3d の Vista3dInferer など）を import できるように、Bundle の置き場を先頭に足す
+sys.path.insert(0, kw['bundle_root'])
 try:
     import torch
     cuda = torch.cuda.is_available()
@@ -595,6 +740,14 @@ if resampled:
         v[inside] = lab[q[0, inside], q[1, inside], q[2, inside]]
         res[:, :, k] = v.reshape(nx, ny)
     lab = res
+# vista3d は、点の窓の外（推論していない所）を 255 で返す。臓器ではないので、背景（0）にして数だけ別に返す
+not_inferred = 0
+if prompt_voxels:
+    channel_def = ((meta.get('network_data_format') or {}).get('outputs') or {}).get('pred', {}).get('channel_def') or {}
+    if '255' not in channel_def:
+        mask = lab == 255
+        not_inferred = int(mask.sum())
+        lab[mask] = 0
 zyx = np.ascontiguousarray(lab.transpose(2, 1, 0))
 dtype = np.uint8 if zyx.max() < 256 else np.uint16
 np.save('outputs/labels.npy', zyx.astype(dtype))
@@ -610,6 +763,9 @@ json.dump({
     'outputFile': os.path.relpath(outs[0], work),
     'resampled': bool(resampled),
     'overrides': OVR,
+    'prompt': {'labels': PROMPT.get('labels') or [], 'points': prompt_voxels},
+    'bundleCodePatched': bundle_patched,
+    'notInferredVoxels': not_inferred,
     'effective': effective,
     'effectiveError': effective_error,
     'outputSpacing': [round(float(z), 4) for z in o.header.get_zooms()[:3]],
@@ -669,11 +825,12 @@ export function settingOverrides(fields, values) {
  * @param {{ name: string, version?: string | null }} bundle
  * @param {Record<string, unknown>} [overrides] Bundle の設定の上書き（例: wholeBody の highres）
  * @param {number} [channels] 重ねるシリーズの数（inputs/0.npz … の本数。1〜8）
+ * @param {{ labels: number[], points: { lps: number[], role: string }[] } | null} [prompt] ラベル番号と点（vista3d・deepedit）
  */
-export function buildScript(bundle, overrides = {}, channels = 1) {
+export function buildScript(bundle, overrides = {}, channels = 1, prompt = null) {
   if (!NAME_RE.test(bundle.name)) throw new Error("bad-bundle-name");
   if (!Number.isInteger(channels) || channels < 1 || channels > 8) throw new Error("bad-channels");
-  const cfg = JSON.stringify({ bundle: { name: bundle.name, version: bundle.version ?? null }, overrides, channels });
+  const cfg = JSON.stringify({ bundle: { name: bundle.name, version: bundle.version ?? null }, overrides, channels, prompt, guidanceChannels: PROMPTS[bundle.name.split("/").pop()]?.guidanceChannels ?? 0 });
   return `GRAPHY = __import__('json').loads(${JSON.stringify(cfg)})\n` + PY;
 }
 
@@ -781,6 +938,7 @@ const normModality = (m) => {
  */
 export function judge(meta, target) {
   const channels = Number(target.channels ?? 1);
+  const guidance = Number(target.guidanceChannels ?? 0);
   const reasons = [];
   const warnings = [];
   const fmt = meta && meta.network_data_format;
@@ -795,7 +953,7 @@ export function judge(meta, target) {
   const image = inputs.image ?? inputs[inKeys[0]];
   if (image) {
     const ch = Number(image.num_channels ?? 1);
-    if (ch !== channels) reasons.push(`入力のチャネル数が ${ch} です（選ばれたシリーズは ${channels} 本）。チャネルの数だけシリーズを選んでください`);
+    if (ch - guidance !== channels) reasons.push(`入力のチャネル数が ${ch - guidance} です（選ばれたシリーズは ${channels} 本）。チャネルの数だけシリーズを選んでください`);
     const want = String(image.modality ?? "")
       .split(/[\/,\s]+/).map(normModality).filter(Boolean);
     const have = normModality(target.modality);
@@ -1038,6 +1196,75 @@ export async function activate(host) {
   const labelBox = el("div", { testid: "monai-labels", style: "display: flex; flex-wrap: wrap; gap: 4px 12px" });
   const saveBtn = el("button", { textContent: "選んだラベルを SEG で保存", testid: "monai-save", disabled: true });
   const result = el("div", { testid: "monai-result" });
+  // ラベル番号と点を渡すモデル（vista3d・DeepEdit）。点は患者座標（LPS, mm）で 1 行 1 点。点 ROI からも読み込める
+  const promptBox = el("div", { testid: "monai-prompt", style: "display: none; flex-direction: column; gap: 4px; border: 1px solid #ccd; border-radius: 4px; padding: 6px 8px" });
+  const bundleNameNow = () => (picker.value === OTHER ? nameInput.value.trim() : picker.value).split("/").pop();
+  let promptLabels = [];
+  const pointsArea = el("textarea", { testid: "monai-points", rows: 4, spellcheck: false, placeholder: "x, y, z, positive\n# 患者座標（LPS, mm）。役割は positive か negative", style: "width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px" });
+  const promptNote = el("div", { testid: "monai-prompt-note", style: "font-size: 11px" });
+  const labelSel = el("select", { testid: "monai-prompt-label", style: "flex: 1; min-width: 0" });
+  const labelAdd = el("button", { textContent: "追加", testid: "monai-prompt-add" });
+  const chips = el("div", { testid: "monai-prompt-chips", style: "display: flex; gap: 4px; flex-wrap: wrap" });
+  const roiBtn = el("button", { textContent: "点 ROI から読み込む", testid: "monai-points-from-rois", style: "align-self: flex-start" });
+  const labelRow = el("div", { style: "display: flex; gap: 6px" }, labelSel, labelAdd);
+  /** 画面の入力から（ラベル, 点, 理由）。理由があれば実行を止める */
+  const readPrompt = () => {
+    const name = bundleNameNow();
+    if (!PROMPTS[name]) return { prompt: null, problem: null };
+    const parsed = parsePoints(pointsArea.value);
+    if (!parsed.ok) return { prompt: null, problem: parsed.error };
+    const problem = promptProblem(name, promptLabels, parsed.points);
+    return { prompt: problem ? null : buildPrompt(name, promptLabels, parsed.points), problem, count: parsed.points.length };
+  };
+  const syncPromptNote = () => {
+    const r = readPrompt();
+    const name = bundleNameNow();
+    const auto = name === "vista3d" && !promptLabels.length && !r.count ? "ラベルも点も無いときは、全自動（117 クラス）で走ります。" : "";
+    promptNote.textContent = r.problem ? "✕ " + r.problem : `${PROMPTS[name]?.labels ? `ラベル ${promptLabels.length} 個・` : ""}点 ${r.count ?? 0} 個。${auto}`;
+    promptNote.style.color = r.problem ? "#b42318" : "#52606d";
+    runBtn.disabled = state.phase === "running" || !!r.problem || (!!plan && !!chosenTiles().problem);
+  };
+  const drawChips = () => {
+    chips.replaceChildren(...promptLabels.map((l) => {
+      const b = el("button", { textContent: `${l} ${vistaLabelOptions(entryOf(picker.value)).find((o) => o.value === l)?.name ?? ""} ×`, style: "font-size: 11px" });
+      b.addEventListener("click", () => { promptLabels = promptLabels.filter((x) => x !== l); drawChips(); syncPromptNote(); });
+      return b;
+    }));
+  };
+  const fillPrompt = () => {
+    const name = bundleNameNow();
+    const spec = PROMPTS[name];
+    promptBox.style.display = spec ? "flex" : "none";
+    promptLabels = [];
+    if (!spec) return;
+    labelRow.style.display = spec.labels ? "flex" : "none";
+    chips.style.display = spec.labels ? "flex" : "none";
+    labelSel.replaceChildren(...vistaLabelOptions(entryOf(picker.value)).map((o) => el("option", { value: String(o.value), textContent: `${o.value} ${o.name}` })));
+    drawChips();
+    const rows = [el("div", { style: "font-weight: 600" }, spec.labels ? "対象のラベルと点（どちらも空なら全自動）" : "クリック点（陽性は対象の上、陰性は対象でない所）"), labelRow, chips,
+      el("div", { style: "font-size: 11px; color: #52606d" }, "点: 1 行 1 点「x, y, z, positive」。患者座標（LPS, mm）です。"), pointsArea, roiBtn, promptNote];
+    promptBox.replaceChildren(...rows);
+    syncPromptNote();
+  };
+  labelAdd.addEventListener("click", () => {
+    const v = Number(labelSel.value);
+    if (v && !promptLabels.includes(v)) promptLabels.push(v);
+    drawChips(); syncPromptNote();
+  });
+  pointsArea.addEventListener("input", syncPromptNote);
+  roiBtn.addEventListener("click", async () => {
+    const vol = await host.loadVolume({ studyUid: target.studyUid, seriesUid: target.seriesUid });
+    if (!vol) { promptNote.textContent = "✕ ボリュームを読めませんでした"; return; }
+    const rois = (host.getRois?.() ?? []).filter((r) => r.seriesUid === target.seriesUid && POINT_TOOLS.includes(r.tool) && r.points.length);
+    const lines = rois.map((r) => {
+      const [x, y, z] = roiToLps(r, vol);
+      const role = /^neg/i.test(r.label ?? "") ? "negative" : "positive";
+      return `${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}, ${role}`;
+    });
+    pointsArea.value = [pointsArea.value.trim(), ...lines].filter(Boolean).join("\n");
+    syncPromptNote();
+    promptNote.textContent += `（点 ROI ${rois.length} 個を読み込みました。ROI のラベルが negative で始まるものは陰性、それ以外は陽性にしています。必要なら書き換えてください）`;
+  });
   const otherRow = el("div", { style: "display: none; gap: 6px" }, nameInput);
   root.append(
     el("div", {
@@ -1050,19 +1277,20 @@ export async function activate(host) {
     otherRow,
     settingsBox,
     channelsBox,
+    promptBox,
     el("div", { style: "display: flex; gap: 6px; align-items: center" }, refreshBtn, listNote),
     el("div", { style: "font-size: 11px; color: #52606d" },
       "「実行」で、匿名化したこのシリーズを送り、計算機の上でモデルの説明（metadata.json）を読んで使えるかを判定してから推論します。" +
       "合わなければ推論せずに止まります。ライセンスは結果と一緒に出ます。"),
     status, info, preview, labelBox, saveBtn, result,
   );
-  const syncPicker = () => { otherRow.style.display = picker.value === OTHER ? "flex" : "none"; fillVersions(); fillSettings(); fillChannels(); };
+  const syncPicker = () => { otherRow.style.display = picker.value === OTHER ? "flex" : "none"; fillVersions(); fillSettings(); fillChannels(); fillPrompt(); };
   picker.addEventListener("change", syncPicker);
   syncPicker();
   const setStatus = (t) => { status.textContent = t; };
   const onProgress = (p, m) => setStatus(`${Math.round(p * 100)}% ${m ?? ""}`);
   // phase は結果を読み終えてから idle に戻す（外から「終わったか」を見る印）
-  const busy = (b) => { state.phase = b ? "running" : "idle"; runBtn.disabled = b || (!b && !!plan && !!chosenTiles().problem); picker.disabled = b; chanSels.forEach((x) => { x.disabled = b; }); versionSel.disabled = b; refreshBtn.disabled = b; settingsBox.querySelectorAll('input').forEach((i) => { i.disabled = b; }); saveBtn.disabled = b || !state.labels; };
+  const busy = (b) => { state.phase = b ? "running" : "idle"; runBtn.disabled = b || (!b && ((!!plan && !!chosenTiles().problem) || !!readPrompt().problem)); picker.disabled = b; chanSels.forEach((x) => { x.disabled = b; }); versionSel.disabled = b; refreshBtn.disabled = b; settingsBox.querySelectorAll('input').forEach((i) => { i.disabled = b; }); saveBtn.disabled = b || !state.labels; };
   win.setCloseGuard?.(() => (state.phase === "running" ? "計算の途中です。閉じると結果を受け取れません。" : null));
   // 閉じたら、この窓で計算に使った Colab のランタイムを解放するかを聞く（確認は本体が出す）。
   // 解放しても次の「実行」が自動で確保し直す
@@ -1125,6 +1353,8 @@ export async function activate(host) {
     if (!set.ok) { setStatus(set.error); return; }
     const chosen = chosenTiles();
     if (chosen.problem) { setStatus(chosen.problem); return; }
+    const pr = readPrompt();
+    if (pr.problem) { setStatus(pr.problem); return; }
     ref = chosen.tiles[0];
     state.overrides = set.overrides;
     state.bundle = null; state.verdict = null; state.labels = null; state.summary = undefined; state.error = undefined;
@@ -1134,7 +1364,7 @@ export async function activate(host) {
     setStatus("送っています…");
     const r = await host.compute.runJob({
       inputs: chosen.tiles.map((t) => ({ studyUid: t.studyUid, seriesUid: t.seriesUid, format: "npz" })),
-      script: buildScript({ name, version: picker.value === OTHER || versionSel.value === entryOf(name)?.versions[0] ? null : versionSel.value }, set.overrides, chosen.tiles.length),
+      script: buildScript({ name, version: picker.value === OTHER || versionSel.value === entryOf(name)?.versions[0] ? null : versionSel.value }, set.overrides, chosen.tiles.length, pr.prompt),
       timeoutSec: 3600,
     }, { onProgress });
     if (!r.ok) {
@@ -1148,7 +1378,7 @@ export async function activate(host) {
     const b = raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
     if (b) {
       state.bundle = b;
-      state.verdict = applyLabelNames(judge(b.metadata, { modality: ref.modality, channels: chosen.tiles.length }), b.name);
+      state.verdict = applyLabelNames(judge(b.metadata, { modality: ref.modality, channels: chosen.tiles.length, guidanceChannels: PROMPTS[b.name?.split("/").pop()]?.guidanceChannels ?? 0 }), b.name);
       showInfo(b, state.verdict);
     }
     if (r.status !== "ok") {
@@ -1235,6 +1465,10 @@ export async function activate(host) {
         cb, el("span", { textContent: "■", style: `color: rgb(${r},${g},${b})` }),
         ` ${names.get(x.value) ?? "label " + x.value}（${x.count}）`);
     }));
+    if (summary.notInferredVoxels > 0) {
+      labelBox.prepend(el("div", { testid: "monai-not-inferred", style: "font-size: 11px; color: #8a4b00" },
+        `点の窓の外（${summary.notInferredVoxels} ボクセル）は推論していません。背景ではなく「未推論」です。範囲を広げたいときは点を足してください。`));
+    }
     state.present = present;
   }
 
