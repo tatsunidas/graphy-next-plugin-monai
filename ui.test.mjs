@@ -625,7 +625,10 @@ test("buildPrompt / vistaLabelOptions / roiToLps", () => {
   assert.deepEqual(opts[2], { value: 3, name: "spleen" });
   // index (col,row,slice) → LPS。indexToWorld は row-major 4x4
   const vol = { dims: [4, 4, 4], indexToWorld: [0.7, 0, 0, -100, 0, 0.8, 0, -120, 0, 0, 2.5, 50, 0, 0, 0, 1] };
-  assert.deepEqual(roiToLps({ points: [[3, 2]], sliceIndex: 1 }, vol).map((v) => +v.toFixed(3)), [-97.9, -118.4, 52.5]);
+  // 画素 (3,2) の中心は、左上隅が 0 の座標で (3.5, 2.5)
+  assert.deepEqual(roiToLps({ points: [[3.5, 2.5]], sliceIndex: 1 }, vol).map((v) => +v.toFixed(3)), [-97.9, -118.4, 52.5]);
+  // 隅の座標をそのまま index として読む（0.5 の取り違え）と、この値にはならない
+  assert.notDeepEqual(roiToLps({ points: [[3, 2]], sliceIndex: 1 }, vol).map((v) => +v.toFixed(3)), [-97.9, -118.4, 52.5]);
 });
 
 /** ラベル番号・点つきの往復（偽の MONAI）。cfg は Bundle の設定、prompt は画面から来る入力 */
