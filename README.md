@@ -57,7 +57,11 @@ GRAPHY-Next の 2D ビューアから、[MONAI Model Zoo](https://monai.io/model
 - 結果の NIfTI を affine で入力の格子に戻し、`labels.npy` と `labels.json` を返す
 - Bundle は作られた MONAI の版（多くは 1.4）の書き方のままなので、互換の手当てをする:
   古い入口（`evaluating`）・廃止された引数の除去（結果の `compat` に記録）・DiNTS 系の datalist の形・設定が使う画像の読み手の依存（itk など）
-- **パッケージを自分で入れるのは Colab のときだけ**。自分で立てた Jupyter では環境を書き換えず、足りない名前を示して止まります
+- **パッケージを自分で入れるのは Colab のときだけ**。自分で立てた Jupyter・「この PC」では環境を書き換えません。
+  **最初の「実行」で、画像を送らない小さな事前チェック（コードだけのジョブ・同意 1 回）が先に走り**、torch・numpy・monai・pytorch-ignite・nibabel の
+  有無を表で示し、計算機が実際に使う Python（`sys.executable`）を名指しした `pip install` のコマンド（コピーできる）を出します。
+  入れたら［再確認］を押します（本体の再起動は要りません）。通ったあとは、その窓のあいだ事前チェックを省きます。Colab は何も確かめずに通ります。
+  Bundle ごとの追加パッケージ（itk など）は Bundle を取ってから分かるので、本処理が止まったときに、同じ枠で名前と Python を示します（入れたらもう一度「実行」）。
 - PyTorch 2.6 以降の安全な読み込み（`weights_only`）を緩めるのは **MONAI 公式の Bundle だけ**です（任意のリポジトリには許しません）
 
 ## 開発
