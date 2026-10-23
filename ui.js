@@ -238,20 +238,10 @@ const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/;
 // ---------------------------------------------------------------------------
 // 計算機の上で走る Python（下見と推論で共通）。先頭に GRAPHY（mode・bundle・overrides）が足される。
 // ---------------------------------------------------------------------------
-export const PY = String.raw`
+/** 事前チェックと本処理で共通の前半（Colab 判定・パッケージの有無） */
+export const PY_ENV = String.raw`
 import glob, json, os, re, subprocess, sys, time
 from importlib import metadata as _md
-
-B = GRAPHY['bundle']
-OVR = GRAPHY.get('overrides') or {}
-PROMPT = GRAPHY.get('prompt') or {'labels': [], 'points': []}
-T0 = time.time()
-STAGES = {}
-
-
-def stage(name, p):
-    STAGES[name] = round(time.time() - T0, 1)
-    print('__progress__', p, name, flush=True)
 
 
 def have(dist):
@@ -273,11 +263,25 @@ def importable(mod):
 # パッケージを自分で入れるのは Colab（使い捨てのランタイム）のときだけ。
 # 利用者が自分で立てた Jupyter の環境は書き換えない（足りなければ名前を示して止める）
 COLAB = bool(os.environ.get('COLAB_RELEASE_TAG')) or importable('google.colab')
+`;
+
+export const PY = PY_ENV + String.raw`
+B = GRAPHY['bundle']
+OVR = GRAPHY.get('overrides') or {}
+PROMPT = GRAPHY.get('prompt') or {'labels': [], 'points': []}
+T0 = time.time()
+STAGES = {}
+
+
+def stage(name, p):
+    STAGES[name] = round(time.time() - T0, 1)
+    print('__progress__', p, name, flush=True)
 
 
 def pip(*pk):
     if not COLAB:
-        raise RuntimeError('missing-packages: この計算機に ' + ' '.join(pk) + ' を入れてください（pip install ' + ' '.join(pk) + '）')
+        # 画面が導入コマンドを出せるよう「名前|使われる Python」の形にする（JS の missingPackages が読む）
+        raise RuntimeError('missing-packages: ' + ' '.join(pk) + '|' + sys.executable)
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-q', '--disable-pip-version-check', *pk])
 
 
@@ -292,9 +296,10 @@ if OFFICIAL:
     os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
 
 stage('setup', 0.02)
+# torch が無いと monai の import が分かりにくい例外で落ちるので、ここで名前を示して止める。
 # ignite は monai より先に入れる（monai は import の時点で ignite の有無を覚えるので、あとから入れても効かない）。
 # Bundle の評価器・ハンドラ（monai.engines / monai.handlers）はほとんどが ignite を使う
-missing = [d for d, m in (('pytorch-ignite', 'ignite'), ('monai', 'monai'), ('nibabel', 'nibabel')) if not importable(m)]
+missing = [d for d, m in (('torch', 'torch'), ('pytorch-ignite', 'ignite'), ('monai', 'monai'), ('nibabel', 'nibabel')) if not importable(m)]
 if missing:
     pip(*missing)
 import numpy as np
@@ -829,6 +834,62 @@ export function settingOverrides(fields, values) {
  * @param {number} [channels] 重ねるシリーズの数（inputs/0.npz … の本数。1〜8）
  * @param {{ labels: number[], points: { lps: number[], role: string }[] } | null} [prompt] ラベル番号と点（vista3d・deepedit）
  */
+/** 事前チェックが見る、非 Colab で要るもの（配布名・import 名）。Bundle ごとの追加パッケージは、Bundle を取ってから分かる */
+export const PROBE_PACKAGES = [["torch", "torch"], ["numpy", "numpy"], ["monai", "monai"], ["pytorch-ignite", "ignite"], ["nibabel", "nibabel"]];
+
+/** 画像を送らない事前チェック。Colab なら何も確かめず通す（Colab は本処理が自分で入れる）。何も入れない・書き換えない */
+export const PY_PROBE = String.raw`
+NEED = json.loads(GRAPHY['need'])
+os.makedirs('outputs', exist_ok=True)
+
+
+def version_of(dist):
+    try:
+        return _md.version(dist)
+    except _md.PackageNotFoundError:
+        return None
+
+
+out = {'colab': COLAB, 'python': sys.executable, 'pyVersion': sys.version.split()[0], 'need': [d for d, _ in NEED],
+       'installed': {}, 'problem': None, 'torchError': None, 'cuda': None}
+if not COLAB:
+    out['installed'] = {d: (version_of(d) if importable(m) else None) for d, m in NEED}
+    missing = [d for d, v in out['installed'].items() if v is None]
+    if missing:
+        out['problem'] = 'missing-packages: ' + ' '.join(missing)
+    elif out['installed']['torch']:
+        try:
+            import torch
+            out['cuda'] = bool(torch.cuda.is_available())
+        except Exception as e:
+            out['torchError'] = type(e).__name__ + ': ' + str(e)[:200]
+            out['problem'] = 'broken-package: torch を読み込めません（' + out['torchError'] + '）。入れ直してください'
+json.dump(out, open('outputs/env.json', 'w', encoding='utf-8'), ensure_ascii=False)
+print('__progress__', 1.0, 'done', flush=True)
+`;
+
+/** 事前チェックのコード（画像は送らない）。差し込むのは見るパッケージの表だけ。 */
+export function buildProbeScript() {
+  const cfg = JSON.stringify({ need: JSON.stringify(PROBE_PACKAGES) });
+  return `GRAPHY = __import__('json').loads(${JSON.stringify(cfg)})\n` + PY_ENV + PY_PROBE;
+}
+
+/**
+ * 足りないものを入れる pip のコマンド。計算機が実際に使う Python（sys.executable）を名指しする
+ * （Windows では python と py が別物のことがある）。空白などを含むパスは引用符で囲む。
+ */
+export function installCommand(python, names) {
+  if (!names.length) return null;
+  const exe = /^[\w./:\\-]+$/.test(python) ? python : `"${python}"`;
+  return `${exe} -m pip install ${names.join(" ")}`;
+}
+
+/** 本処理が「名前|Python」で返した missing-packages を読む。違う形なら null */
+export function missingPackages(errorValue) {
+  const m = /^missing-packages: ([^|]+)\|(.+)$/s.exec(String(errorValue ?? ""));
+  return m ? { names: m[1].trim().split(/\s+/), python: m[2].trim() } : null;
+}
+
 export function buildScript(bundle, overrides = {}, channels = 1, prompt = null) {
   if (!NAME_RE.test(bundle.name)) throw new Error("bad-bundle-name");
   if (!Number.isInteger(channels) || channels < 1 || channels > 8) throw new Error("bad-channels");
@@ -1193,6 +1254,7 @@ export async function activate(host) {
   const nameInput = el("input", { testid: "monai-bundle-name", placeholder: "例: MONAI/spleen_ct_segmentation", style: "flex: 1" });
   const runBtn = el("button", { textContent: "実行", testid: "monai-run" });
   const status = el("div", { testid: "monai-status", style: "color: #52606d; min-height: 1.2em" });
+  const envBox = el("div", { testid: "monai-env", style: "display: none; flex-direction: column; gap: 6px; padding: 8px 10px; background: #fdf0e3; border: 1px solid #e0b884; border-radius: 4px; color: #5c3300" });
   const info = el("div", { testid: "monai-info" });
   const preview = el("canvas", { testid: "monai-preview", style: "display: none; max-width: 100%; image-rendering: pixelated; border: 1px solid #ccd" });
   const labelBox = el("div", { testid: "monai-labels", style: "display: flex; flex-wrap: wrap; gap: 4px 12px" });
@@ -1284,7 +1346,7 @@ export async function activate(host) {
     el("div", { style: "font-size: 11px; color: #52606d" },
       "「実行」で、匿名化したこのシリーズを送り、計算機の上でモデルの説明（metadata.json）を読んで使えるかを判定してから推論します。" +
       "合わなければ推論せずに止まります。ライセンスは結果と一緒に出ます。"),
-    status, info, preview, labelBox, saveBtn, result,
+    status, envBox, info, preview, labelBox, saveBtn, result,
   );
   const syncPicker = () => { otherRow.style.display = picker.value === OTHER ? "flex" : "none"; fillVersions(); fillSettings(); fillChannels(); fillPrompt(); };
   picker.addEventListener("change", syncPicker);
@@ -1346,6 +1408,86 @@ export async function activate(host) {
     busy(false);
   });
 
+  /** 事前チェックを通ったか（この窓のあいだだけ覚える。通ったあとは同意の窓を増やさない） */
+  let envOk = false;
+
+  /** 足りないものの案内。入れるのは利用者（環境は書き換えない）。recheck: 事前チェックのやり直しボタンを付けるか */
+  const showEnv = (env, recheck) => {
+    const names = Object.keys(env.installed);
+    const rows = names.map((d) => el("div", { style: "display: flex; gap: 12px; font-size: 12px" },
+      el("span", { style: "width: 130px; font-weight: 600" }, d),
+      el("span", {}, env.installed[d] == null ? "✗ 入っていません" : "✓ " + env.installed[d])));
+    const cmd = installCommand(env.python, names.filter((d) => env.installed[d] == null));
+    const kids = [
+      el("div", { style: "font-weight: 600" }, "実行の前に、この計算機の Python に足りないものがあります"),
+      el("div", { testid: "monai-env-python", style: "font-size: 12px; word-break: break-all" }, `使われる Python: ${env.python}${env.pyVersion ? `（${env.pyVersion}）` : ""}`),
+      ...rows,
+    ];
+    if (env.problem && /^broken-package/.test(env.problem)) kids.push(el("div", { style: "font-size: 12px" }, env.problem.replace(/^broken-package: /, "")));
+    if (cmd) {
+      const area = el("textarea", { value: cmd, readOnly: true, rows: 4, testid: "monai-env-command", style: "width: 100%; box-sizing: border-box; font: 12px ui-monospace, monospace" });
+      const copy = el("button", { textContent: "コマンドをコピー", testid: "monai-env-copy", style: "font-size: 11px" });
+      copy.addEventListener("click", () => { void navigator.clipboard?.writeText(cmd); });
+      kids.push(
+        el("div", { style: "font-size: 12px" }, "ターミナル（Windows は PowerShell かコマンドプロンプト）で、次を実行してください。このプラグインは環境を書き換えません。"),
+        area, copy,
+        el("div", { style: "font-size: 11px; line-height: 1.5" },
+          "GPU（CUDA）で動かしたいときは、torch だけ pytorch.org の案内の版を入れてください。" +
+          "パスを引用符で囲んだ場合、PowerShell では先頭に & を付けてください。"));
+    }
+    if (recheck) {
+      const again = el("button", { textContent: "再確認", testid: "monai-env-recheck", style: "align-self: flex-start; padding: 2px 14px" });
+      again.addEventListener("click", async () => {
+        again.disabled = true;
+        busy(true);
+        state.usedCompute = true;
+        const ok = await checkEnv();
+        busy(false);
+        if (ok) setStatus("環境は整いました。「実行」を押してください");
+        again.disabled = false;
+      });
+      kids.push(again, el("div", { style: "font-size: 11px" }, "入れたら［再確認］を押してください（本体の再起動は要りません）。"));
+    } else {
+      kids.push(el("div", { style: "font-size: 11px" }, "入れたら、もう一度「実行」を押してください（取得した Bundle は再利用します）。"));
+    }
+    envBox.replaceChildren(...kids);
+    envBox.style.display = "flex";
+  };
+
+  /** 画像を送らない小さなジョブで、計算機の Python を確かめる。整っていれば true（Colab は常に true） */
+  const checkEnv = async () => {
+    setStatus("計算機の環境を確認しています…");
+    const r = await host.compute.runJob({ inputs: [], script: buildProbeScript(), timeoutSec: 300 }, { onProgress });
+    if (!r.ok) {
+      state.error = r.error;
+      setStatus(r.cancelled ? "取り消しました" : `失敗: ${explain(r.error)}`);
+      return false;
+    }
+    if (r.status !== "ok") {
+      state.error = `${r.errorName}: ${r.errorValue}`;
+      setStatus(`失敗: ${r.errorName}: ${r.errorValue}`);
+      return false;
+    }
+    const raw = await r.readFile("env.json");
+    if (!raw) {
+      state.error = "no-env";
+      setStatus("失敗: 環境の確認結果が返りませんでした");
+      return false;
+    }
+    const env = JSON.parse(new TextDecoder().decode(raw));
+    state.env = env;
+    if (env.problem) {
+      envOk = false;
+      showEnv(env, true);
+      setStatus("足りないものがあります。下の手順で入れて、［再確認］を押してください");
+      return false;
+    }
+    envOk = true;
+    envBox.style.display = "none";
+    envBox.replaceChildren();
+    return true;
+  };
+
   runBtn.addEventListener("click", async () => {
     const name = picker.value === OTHER ? nameInput.value.trim() : picker.value;
     if (!validBundleName(name)) { setStatus("名前に使えない文字があります"); return; }
@@ -1363,6 +1505,7 @@ export async function activate(host) {
     info.replaceChildren(); labelBox.replaceChildren(); result.replaceChildren(); preview.style.display = "none";
     busy(true);
     state.usedCompute = true;
+    if (!envOk && !(await checkEnv())) { busy(false); return; }
     setStatus("送っています…");
     const r = await host.compute.runJob({
       inputs: chosen.tiles.map((t) => ({ studyUid: t.studyUid, seriesUid: t.seriesUid, format: "npz" })),
@@ -1387,6 +1530,13 @@ export async function activate(host) {
       state.error = `${r.errorName}: ${r.errorValue}`;
       state.traceback = r.traceback;
       state.stderr = r.stderr;
+      const mp = missingPackages(r.errorValue);
+      if (mp) {
+        showEnv({ python: mp.python, pyVersion: "", installed: Object.fromEntries(mp.names.map((n) => [n, null])), problem: null }, false);
+        setStatus("足りないものがあります。下の手順で入れて、もう一度「実行」を押してください");
+        busy(false);
+        return;
+      }
       const notApplicable = /^not-applicable/.test(r.errorValue ?? "");
       setStatus(notApplicable ? "このシリーズには使えないモデルです（推論はしていません）" : `失敗: ${r.errorName}: ${r.errorValue}`);
       busy(false);

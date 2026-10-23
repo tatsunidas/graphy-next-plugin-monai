@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
+import { activate, PY_ENV, PY_PROBE, buildProbeScript, installCommand, missingPackages, NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -229,6 +229,8 @@ const PYTHON = process.env.GRAPHY_TEST_PYTHON;
 const FAKE_MONAI = {
   "monai/__init__.py": "__version__ = '0.0-fake'\n",
   "ignite/__init__.py": "",
+  // 本処理は torch の有無も確かめる（足りなければ missing-packages）。偽物の MONAI と同じく、試験機に torch が無くても動くように置く
+  "torch/__init__.py": "class cuda:\n    @staticmethod\n    def is_available():\n        return False\n",
   "monai/bundle/config_item.py": `
 class ComponentLocator:
     def get_component_module_name(self, name):
@@ -408,7 +410,7 @@ test("PY does not install packages outside Colab", { skip: !PYTHON && "GRAPHY_TE
     const r = spawnSync(PYTHON, ["-c", buildScript({ name: "spleen_ct_segmentation" })], { cwd: dir, env, encoding: "utf8" });
     // 手元の Python に MONAI が入っていれば先へ進むので、そのときは「pip を呼んでいない」ことだけ確かめる
     assert.doesNotMatch(r.stdout + r.stderr, /Collecting|Successfully installed/);
-    if (r.status !== 0 && /monai|nibabel/.test(r.stderr)) assert.match(r.stderr, /missing-packages/);
+    if (r.status !== 0 && /monai|nibabel|torch/.test(r.stderr)) assert.match(r.stderr, /missing-packages/, "足りないものは、import の例外でなく missing-packages で止まる");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -746,4 +748,174 @@ test("PY prompt: 点があるとき 255（点の窓の外）は背景にして�
   assert.equal(noPts.r.status, 0, noPts.r.stderr);
   assert.equal(noPts.summary.labels["255"], 6, "点が無いときは触らない");
   assert.equal(noPts.summary.notInferredVoxels, 0);
+});
+
+// --- 画面（最小の偽 DOM）と、事前チェック（依存パッケージの案内） ---
+class El {
+  constructor(tag) { this.tag = tag; this.kids = []; this.style = {}; this.dataset = {}; this.handlers = {}; this.textContent = ""; this._value = undefined; this.disabled = false; }
+  append(...c) { this.kids.push(...c); }
+  appendChild(c) { this.kids.push(c); return c; }
+  replaceChildren(...c) { this.kids = c; }
+  addEventListener(n, f) { this.handlers[n] = f; }
+  get value() { return this._value !== undefined ? this._value : (this.tag === "select" ? (this.optionList()[0]?.value ?? "") : ""); }
+  set value(v) { this._value = v; }
+  optionList() { return this.kids.flatMap((k) => (k.tag === "option" ? [k] : k.tag === "optgroup" ? k.kids.filter((o) => o.tag === "option") : [])); }
+  get children() { return this.kids.filter((k) => k instanceof El); }
+  get options() { return this.optionList(); }
+  querySelector(sel) { return sel === "option:not([disabled])" ? this.kids.find((k) => k.tag === "option" && !k.disabled) ?? null : null; }
+  querySelectorAll(tag) { return this.kids.flatMap((k) => (k instanceof El ? [...(k.tag === tag ? [k] : []), ...k.querySelectorAll(tag)] : [])); }
+  text() { return this.textContent + this.kids.map((k) => (k instanceof El ? k.text() : String(k))).join(""); }
+  find(id) { if (this.dataset.testid === id) return this; for (const k of this.kids) { const f = k instanceof El ? k.find(id) : null; if (f) return f; } return null; }
+}
+const FULL = { torch: "2.4.0", numpy: "1.26.0", monai: "1.4.0", "pytorch-ignite": "0.5.1", nibabel: "5.2.0" };
+const envJson = (installed, extra = {}) => ({ colab: false, python: "/usr/bin/python3", pyVersion: "3.11.9", need: Object.keys(FULL), cuda: false, torchError: null, problem: null, installed: { ...FULL, ...installed }, ...extra });
+const probeOutcome = (env) => ({ ok: true, status: "ok", readFile: async (n) => (n === "env.json" ? new TextEncoder().encode(JSON.stringify(env)) : null) });
+function fakeMonai(mainOutcome, probes = [probeOutcome(envJson({}))]) {
+  globalThis.window = {};
+  globalThis.document = { createElement: (t) => new El(t) };
+  const calls = [], notes = [];
+  const container = new El("div");
+  const host = {
+    getTargets: () => [{ kind: "image", tileId: "t", studyUid: "S", seriesUid: "R", seriesLabel: "CT", modality: "CT", sliceCount: 100 }],
+    notify: (m) => notes.push(m),
+    openWindow: () => ({ container, setCloseGuard() {}, onClose() {} }),
+    compute: {
+      status: async () => [],
+      // 事前チェック（inputs が空で、一覧の更新でないもの）は probes を順に返す。最後の 1 件は繰り返す。本処理は mainOutcome
+      runJob: async (opts) => {
+        calls.push(opts);
+        if (opts.inputs.length === 0) return probes.length > 1 ? probes.shift() : probes[0];
+        return mainOutcome;
+      },
+    },
+  };
+  return { host, calls, notes, container };
+}
+const failedMain = (errorValue) => ({ ok: true, status: "error", errorName: "RuntimeError", errorValue, readFile: async () => null, traceback: "", stderr: "" });
+
+test("installCommand: 計算機が使う Python を名指しし、空白を含むパスは引用符で囲む", () => {
+  assert.equal(installCommand("/usr/bin/python3", ["torch", "monai"]), "/usr/bin/python3 -m pip install torch monai");
+  assert.equal(installCommand("C:\\Python311\\python.exe", ["nibabel"]), "C:\\Python311\\python.exe -m pip install nibabel");
+  assert.equal(installCommand("C:\\Users\\A B\\py\\python.exe", ["nibabel"]), '"C:\\Users\\A B\\py\\python.exe" -m pip install nibabel');
+  assert.equal(installCommand("/usr/bin/python3", []), null);
+});
+
+test("missingPackages: 本処理の『名前|Python』を読む。別の形は null", () => {
+  assert.deepEqual(missingPackages("missing-packages: monai nibabel|/usr/bin/python3"), { names: ["monai", "nibabel"], python: "/usr/bin/python3" });
+  assert.deepEqual(missingPackages("missing-packages: itk|C:\\Users\\A B\\python.exe"), { names: ["itk"], python: "C:\\Users\\A B\\python.exe" });
+  assert.equal(missingPackages("not-applicable: x"), null);
+  assert.equal(missingPackages("missing-packages: monai"), null);
+});
+
+test("本処理の Python: Colab 以外で足りなければ pip を呼ばず、『名前|使われる Python』で止まる", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
+  try {
+    const env = { ...process.env, PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8", HOME: dir, USERPROFILE: dir, PYTHONPATH: path.join(dir, "empty") };
+    delete env.COLAB_RELEASE_TAG;
+    const r = spawnSync(PYTHON, ["-c", buildScript({ name: "spleen_ct_segmentation" })], { cwd: dir, env, encoding: "utf8" });
+    if (r.status !== 0 && /missing-packages/.test(r.stderr)) {
+      const m = /RuntimeError: (missing-packages: .+)/.exec(r.stderr);
+      const parsed = missingPackages(m[1]);
+      assert.ok(parsed && parsed.names.length && parsed.python, m[1]);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const probeRun = (versions, { colab = false, fakeTorch = false, extraEnv = {} } = {}) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "monai-probe-"));
+  try {
+    // 版の表だけを偽装する（試験機に入っているものに左右されない）。判定・書き出しは本物の PY_PROBE
+    const script = buildProbeScript().replace("\nNEED = json.loads", `
+_VER = json.loads(${JSON.stringify(JSON.stringify(versions))})
+importable = lambda m: _VER.get({'ignite': 'pytorch-ignite'}.get(m, m)) is not None
+${colab ? "COLAB = True" : "COLAB = False"}
+${fakeTorch ? "import types; _t = types.ModuleType('torch'); _t.cuda = types.SimpleNamespace(is_available=lambda: False); sys.modules['torch'] = _t" : ""}
+NEED = json.loads`).replace("def version_of(dist):\n    try:\n        return _md.version(dist)", "def version_of(dist):\n    try:\n        return _VER[dist] if _VER.get(dist) else _md.version(dist)");
+    const r = spawnSync(PYTHON, ["-c", script], { cwd: dir, env: { ...process.env, ...extraEnv }, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(fs.readFileSync(path.join(dir, "outputs", "env.json"), "utf-8"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+const skipPy = { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" };
+
+test("プローブ: 揃っていれば problem は null。Python の場所と版を返す", skipPy, () => {
+  const e = probeRun(FULL, { fakeTorch: true });
+  assert.equal(e.problem, null);
+  assert.equal(e.colab, false);
+  assert.equal(e.cuda, false);
+  assert.ok(e.python && e.pyVersion);
+});
+
+test("プローブ: 足りないものは problem に名前を並べる（負例）", skipPy, () => {
+  const e = probeRun({ ...FULL, monai: null, nibabel: null }, { fakeTorch: true });
+  assert.equal(e.problem, "missing-packages: monai nibabel");
+  assert.equal(e.installed.monai, null);
+});
+
+test("プローブ: Colab は何も確かめず通す（Colab は本処理が自分で入れる）", skipPy, () => {
+  const e = probeRun({}, { colab: true });
+  assert.equal(e.colab, true);
+  assert.equal(e.problem, null);
+  assert.deepEqual(e.installed, {});
+});
+
+test("プローブ: 入っているが読み込めない torch は broken-package（負例）", skipPy, () => {
+  // 偽の torch を import で例外にする
+  const e = probeRun(FULL, { extraEnv: {} });
+  // この試験機の Python に本物の torch が無ければ import が失敗する。有れば成功して problem は null
+  if (e.torchError) assert.match(e.problem, /^broken-package: torch を読み込めません/);
+});
+
+test("画面: 不足なら本処理を出さず、環境の枠にコマンドを出す。入れて［再確認］で通り、実行が出る", async () => {
+  const missing = probeOutcome(envJson({ monai: null }, { problem: "missing-packages: monai" }));
+  const fixed = probeOutcome(envJson({}));
+  const { host, calls, container } = fakeMonai(failedMain("not-applicable: テスト"), [missing, fixed]);
+  await activate(host);
+  await container.find("monai-run").handlers.click();
+  assert.equal(calls.length, 1, "本処理は出さない（事前チェックだけ）");
+  assert.deepEqual(calls[0].inputs, []);
+  assert.equal(calls[0].script, buildProbeScript());
+  assert.equal(container.find("monai-env").style.display, "flex");
+  assert.equal(container.find("monai-env-command").value, "/usr/bin/python3 -m pip install monai");
+  assert.match(container.find("monai-env-python").text(), /\/usr\/bin\/python3.*3\.11\.9/);
+  assert.match(container.find("monai-env").text(), /monai.*✗ 入っていません/);
+  assert.equal(container.find("monai-run").disabled, false, "入れ直して押し直せる");
+  await container.find("monai-env-recheck").handlers.click();
+  assert.equal(container.find("monai-env").style.display, "none");
+  assert.match(container.find("monai-status").textContent, /環境は整いました/);
+  await container.find("monai-run").handlers.click();
+  assert.equal(calls.filter((c) => c.inputs.length === 1).length, 1, "整ったので本処理が 1 回出る");
+});
+
+test("画面: 一度通れば 2 回目の実行では事前チェックを省く（同意の窓を増やさない）。Colab は枠なしで通る", async () => {
+  const colab = probeOutcome(envJson({}, { colab: true, installed: {} }));
+  const { host, calls, container } = fakeMonai(failedMain("not-applicable: テスト"), [colab]);
+  await activate(host);
+  await container.find("monai-run").handlers.click();
+  assert.notEqual(container.find("monai-env").style.display, "flex", "Colab では枠を出さない");
+  await container.find("monai-run").handlers.click();
+  assert.deepEqual(calls.map((c) => c.inputs.length), [0, 1, 1]);
+});
+
+test("画面: 本処理が Bundle 固有の missing-packages で止まったら、同じ枠に Python 名指しのコマンドを出す", async () => {
+  const { host, calls, container } = fakeMonai(failedMain("missing-packages: itk pynrrd|/opt/py/bin/python3"));
+  await activate(host);
+  await container.find("monai-run").handlers.click();
+  assert.deepEqual(calls.map((c) => c.inputs.length), [0, 1]);
+  assert.equal(container.find("monai-env").style.display, "flex");
+  assert.equal(container.find("monai-env-command").value, "/opt/py/bin/python3 -m pip install itk pynrrd");
+  assert.equal(container.find("monai-env-recheck"), null, "Bundle 固有の不足は事前チェックでは見えないので、再確認ではなく『もう一度実行』");
+  assert.match(container.find("monai-env").text(), /もう一度「実行」/);
+});
+
+test("画面: 事前チェックが断られたら理由を出し、本処理は出さない", async () => {
+  const { host, calls, container } = fakeMonai(failedMain("x"), [{ ok: false, error: "local-unavailable" }]);
+  await activate(host);
+  await container.find("monai-run").handlers.click();
+  assert.equal(calls.length, 1);
+  assert.match(container.find("monai-status").textContent, /失敗/);
 });
