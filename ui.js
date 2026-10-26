@@ -1118,6 +1118,204 @@ export function colorFor(value) {
 }
 
 // ---------------------------------------------------------------------------
+// AI アシスタント向けのツール（plugin.json の aiTools）。画面（activate）とは独立で、同じ純関数を使う。
+//   segment_models … 使えるモデルと、指定できる臓器名（読み取り）
+//   segment_run    … 臓器名で分割して ROI マネージャへ出す（外部の計算機へ送る。同意は本体が毎回取る）
+//   segment_undo   … このプラグインが出した結果を消す
+// 保存（SEG）はしない。保存は利用者が画面の「SEG で保存」を押す。
+// ---------------------------------------------------------------------------
+
+/** 臓器名（日本語）→ ラベル名に含まれる英語の語幹。Bundle の channel_def（snake_case の英語）に当てる。 */
+export const ORGAN_ALIASES = {
+  肝臓: ["liver"], 脾臓: ["spleen"],
+  // "kideny" は swin_unetr_btcv_segmentation の channel_def の綴り（Bundle 側の誤記）
+  腎臓: ["kidney", "kideny"], 膵臓: ["pancreas"], 胆嚢: ["gallbladder"], 胃: ["stomach"],
+  大動脈: ["aorta"], 下大静脈: ["inferior_vena_cava", "ivc"], 門脈: ["portal_vein", "portal_and_splenic"], 副腎: ["adrenal"], 肺: ["lung"],
+  食道: ["esophagus"], 気管: ["trachea"], 脳: ["brain"], 心臓: ["heart"], 膀胱: ["bladder"], 前立腺: ["prostate"],
+  十二指腸: ["duodenum"], 小腸: ["small_bowel"], 大腸: ["colon"], 結腸: ["colon"], 肋骨: ["rib"], 椎体: ["vertebrae"],
+  肺動脈: ["pulmonary_artery"], 腸骨: ["iliac"], 大腿骨: ["femur"], 仙骨: ["sacrum"], 胸骨: ["sternum"], 甲状腺: ["thyroid"],
+};
+
+const SIDES = [
+  [/^(左|left[\s_-]*)/i, "left"],
+  [/^(右|right[\s_-]*)/i, "right"],
+];
+
+/** AI ツールで使うモデル（Colab で最後まで通した CT の分割）。 */
+export const AI_MODELS = [
+  "spleen_ct_segmentation", "wholeBody_ct_segmentation", "swin_unetr_btcv_segmentation", "multi_organ_segmentation", "pancreas_ct_dints_segmentation",
+];
+
+const labelsOf = (entry) => {
+  const def = entry?.ndf?.outputs?.pred?.channel_def;
+  return def && typeof def === "object"
+    ? Object.entries(def).map(([k, v]) => ({ value: Number(k), name: String(v) })).filter((l) => Number.isInteger(l.value) && l.value > 0)
+    : [];
+};
+
+/**
+ * 臓器名（カンマ・読点区切り）を、そのモデルのラベルに当てる。左右は「左」「右」「left」「right」で絞る。
+ * 別名表に無い語は、英語のラベル名への部分一致（3 文字以上）で探す（ラベル名は小文字にして空白を _ にそろえる）。1 つでも当たらなければ ok:false（送る前に止める）。
+ * @param {any} entry ZOO の 1 行
+ * @param {string} text
+ * @returns {{ ok: true, labels: Array<{ value: number, name: string }>, terms: string[] } | { ok: false, error: string, missing: string[], available: string[] }}
+ */
+export function resolveOrgans(entry, text) {
+  const all = labelsOf(entry);
+  const terms = String(text ?? "").split(/[,、，;\n]/).map((s) => s.trim()).filter(Boolean);
+  const available = all.map((l) => l.name);
+  if (terms.length === 0 || terms.length > 8) return { ok: false, error: terms.length === 0 ? "no-organs" : "too-many-organs", missing: [], available };
+  const picked = new Map();
+  const missing = [];
+  for (const term of terms) {
+    let rest = term;
+    let side = null;
+    for (const [re, s] of SIDES) {
+      if (re.test(rest)) { side = s; rest = rest.replace(re, "").trim(); break; }
+    }
+    const stems = ORGAN_ALIASES[rest] ?? (rest.length >= 3 ? [rest.toLowerCase().replace(/[\s-]+/g, "_")] : []);
+    const hits = all.filter((l) => {
+      const n = l.name.toLowerCase().replace(/[\s-]+/g, "_");
+      return stems.some((s) => n.includes(s)) && (!side || n.split("_").includes(side));
+    });
+    if (hits.length === 0) missing.push(term);
+    for (const h of hits) picked.set(h.value, h);
+  }
+  if (missing.length) return { ok: false, error: "organ-not-found", missing, available };
+  return { ok: true, labels: [...picked.values()].sort((a, b) => a.value - b.value), terms };
+}
+
+/**
+ * 使うモデルを決める。`model` の指定があればそれだけ、無ければ全部の臓器が解決できる中でラベル数が最少のもの。
+ * @param {any[]} entries ZOO.entries
+ * @param {string} organs
+ * @param {string} [model]
+ */
+export function pickModel(entries, organs, model) {
+  const names = model ? [model] : AI_MODELS;
+  if (model && !AI_MODELS.includes(model)) return { ok: false, error: "unknown-model" };
+  const found = names.map((n) => entries.find((e) => e.name === n)).filter(Boolean);
+  if (found.length === 0) return { ok: false, error: "no-model" };
+  const tried = found.map((entry) => ({ entry, r: resolveOrgans(entry, organs) }));
+  const good = tried.filter((t) => t.r.ok).sort((a, b) => labelsOf(a.entry).length - labelsOf(b.entry).length);
+  if (good.length) return { ok: true, entry: good[0].entry, resolved: /** @type {any} */ (good[0].r) };
+  // 1 つのモデルでは足りない: 語ごとに、どのモデルでも当たらないもの（＝名前が違う）と、当たるが別々のモデルになるものを分ける
+  const terms = String(organs ?? "").split(/[,、，;\n]/).map((s) => s.trim()).filter(Boolean);
+  const nowhere = terms.filter((term) => !found.some((e) => resolveOrgans(e, term).ok));
+  if (nowhere.length) return { ok: false, error: "organ-not-found", missing: nowhere, available: Object.keys(ORGAN_ALIASES) };
+  if (terms.length > 8 || terms.length === 0) return { ok: false, error: terms.length === 0 ? "no-organs" : "too-many-organs" };
+  return { ok: false, error: "no-single-model", hint: "これらの臓器を 1 つで分割できるモデルがありません。臓器ごとに分けて実行してください" };
+}
+
+/** 指定したラベルだけを残した volume（他は 0）と、ラベルごとのボクセル数。 */
+export function keepLabels(data, values) {
+  const want = new Set(values);
+  const out = new /** @type {any} */ (data.constructor)(data.length);
+  const counts = Object.fromEntries(values.map((v) => [v, 0]));
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (v !== 0 && want.has(v)) { out[i] = v; counts[v]++; }
+  }
+  return { data: out, counts };
+}
+
+/** ボクセル数 × ボクセル体積（mm³）→ mL。 */
+export const volumeMl = (voxels, spacing) => (voxels * spacing[0] * spacing[1] * spacing[2]) / 1000;
+
+const NOTE = "研究用。診断には使わない。結果は必ず画像で確かめてから使う。";
+/** このプラグインが出した Mask（segmentationId）。segment_undo が消す。 */
+let shownIds = [];
+
+/** 使えるモデルと指定できる臓器名。AI ツールの結果は入れ子の深さ 3 までなので、臓器名は 1 本の文字列にする。 */
+export function segmentModels(entries = ZOO.entries) {
+  const out = AI_MODELS.map((n) => entries.find((e) => e.name === n)).filter(Boolean)
+    .map((e) => ({ model: e.name, modality: "CT", organs: labelsOf(e).map((l) => l.name).join(", "), labelCount: labelsOf(e).length }));
+  return { ok: true, models: out, ja: Object.keys(ORGAN_ALIASES), note: NOTE };
+}
+
+/**
+ * 分割を実行する。取り消し・失敗は理由コードだけを返し、何も表示しない。
+ * @param {any} host
+ * @param {{ organs?: string, model?: string }} args
+ * @param {{ entries?: any[], onProgress?: (p: number, m?: string) => void }} [o]
+ */
+export async function segmentRun(host, args, o = {}) {
+  const entries = o.entries ?? ZOO.entries;
+  const target = (host.getTargets?.() ?? []).find((t) => t.kind === "image");
+  if (!target) return { ok: false, error: "no-image" };
+  const picked = pickModel(entries, String(args.organs ?? ""), args.model);
+  if (!picked.ok) return picked;
+  const { entry, resolved } = /** @type {any} */ (picked);
+  const cls = classify(entry, normModality(target.modality));
+  if (cls.kind === "stopped") return { ok: false, error: "model-not-applicable", model: entry.name, reasons: cls.reasons.slice(0, 2) };
+  const want = resolved.labels;
+  const r = await host.compute.runJob({
+    inputs: [{ studyUid: target.studyUid, seriesUid: target.seriesUid, format: "npz" }],
+    script: buildScript({ name: entry.name, version: null }, {}, 1, null),
+    timeoutSec: 3600,
+  }, { onProgress: o.onProgress });
+  if (!r.ok) return { ok: false, error: r.cancelled ? "declined" : String(r.error ?? "compute-failed").slice(0, 80) };
+  if (r.status !== "ok") {
+    const mp = missingPackages(r.errorValue);
+    if (mp) return { ok: false, error: "environment-missing", packages: mp.names.slice(0, 8), hint: "プラグインを「解析」メニューから一度開いて、計算機の環境を整えてください" };
+    if (/^not-applicable/.test(r.errorValue ?? "")) return { ok: false, error: "model-not-applicable", model: entry.name };
+    return { ok: false, error: "compute-failed", detail: String(r.errorName ?? "").slice(0, 60) };
+  }
+  const [lj, ln] = await Promise.all([r.readFile("labels.json"), r.readFile("labels.npy")]);
+  if (!lj || !ln) return { ok: false, error: "no-result" };
+  let summary, npy;
+  try {
+    summary = JSON.parse(new TextDecoder().decode(lj));
+    npy = parseNpy(ln);
+  } catch {
+    return { ok: false, error: "bad-result" };
+  }
+  const vol = await host.loadVolume({ studyUid: target.studyUid, seriesUid: target.seriesUid });
+  if (!vol) return { ok: false, error: "no-volume" };
+  const mapped = mapSlices(summary.geometry, /** @type {any} */ (npy.shape), vol);
+  if (!mapped.ok) return { ok: false, error: "grid-mismatch" };
+  const full = reorderLabels(/** @type {any} */ (npy.data), mapped.kMap, vol.dims[0] * vol.dims[1]);
+  const { data, counts } = keepLabels(full, want.map((l) => l.value));
+  const present = want.filter((l) => counts[l.value] > 0);
+  if (present.length === 0) return { ok: false, error: "nothing-found", model: entry.name, organs: want.map((l) => l.name) };
+  const names = new Map(want.map((l) => [l.value, l.name]));
+  const shown = await host.showLabelVolume(target.tileId, {
+    grid: { dims: vol.dims, ipp: vol.ipp, sliceStep: vol.sliceStep },
+    data,
+    table: labelTable(present.map((l) => l.value), names, entry.name),
+    label: `MONAI ${entry.name}`,
+  });
+  if (!shown.ok) return { ok: false, error: "show-failed", detail: String(shown.error ?? "").slice(0, 80) };
+  shownIds.push(shown.segmentationId);
+  return {
+    ok: true,
+    model: entry.name,
+    organs: present.map((l) => ({ name: l.name, voxels: counts[l.value], volumeMl: Math.round(volumeMl(counts[l.value], vol.spacing) * 10) / 10 })),
+    notFound: want.filter((l) => counts[l.value] === 0).map((l) => l.name),
+    note: NOTE,
+  };
+}
+
+/** このプラグインが出した Mask を消す。 */
+export function segmentUndo(host) {
+  if (typeof host.removeLabelVolume !== "function") return { ok: false, error: "unsupported-host" };
+  let removed = 0;
+  const left = [];
+  for (const id of shownIds) {
+    if (host.removeLabelVolume(id)) removed++;
+    else left.push(id);
+  }
+  shownIds = left;
+  return { ok: true, removed, remaining: left.length };
+}
+
+export const aiTools = {
+  segment_models: async () => segmentModels(),
+  segment_run: async (args, host) => segmentRun(host, args),
+  segment_undo: async (args, host) => segmentUndo(host),
+};
+
+// ---------------------------------------------------------------------------
 // 画面
 // ---------------------------------------------------------------------------
 
