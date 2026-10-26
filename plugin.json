@@ -10,5 +10,57 @@
   "contributes": ["viewer2d.menu.analysis"],
   "category": "ai",
   "ui": "ui.js",
-  "permissions": ["remote-compute"]
+  "permissions": ["remote-compute", "ai-tools"],
+  "aiTools": [
+    {
+      "name": "segment_models",
+      "description": "List the CT segmentation models and the organ names that can be requested (read only).",
+      "effect": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "segment_run",
+      "description": "Segment organs on the displayed CT series with a MONAI bundle on an external GPU and show the result in the ROI manager. The image is sent to the compute endpoint after the user approves. Research use only.",
+      "effect": "write",
+      "timeoutSec": 900,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "organs": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Organ names separated by commas, Japanese or English (e.g. 脾臓, liver, 左腎臓)."
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "spleen_ct_segmentation",
+              "wholeBody_ct_segmentation",
+              "swin_unetr_btcv_segmentation",
+              "multi_organ_segmentation",
+              "pancreas_ct_dints_segmentation"
+            ],
+            "description": "Optional. Chosen automatically when omitted."
+          }
+        },
+        "required": [
+          "organs"
+        ]
+      }
+    },
+    {
+      "name": "segment_undo",
+      "description": "Remove the segmentation result shown by segment_run.",
+      "effect": "write",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  ]
 }
