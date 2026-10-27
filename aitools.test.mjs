@@ -203,3 +203,31 @@ test("aiTools: plugin.json の宣言と同じ名前で、引数つきで呼べ�
   assert.deepEqual(Object.keys(aiTools).sort(), ["segment_models", "segment_run", "segment_undo"]);
   assert.equal((await aiTools.segment_models({}, {})).ok, true);
 });
+
+test("plugin.json の skills[]: 自分の aiTools だけを指し、入力は定義済みで、ask より前に使わない", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const manifest = JSON.parse(await readFile(new URL("./plugin.json", import.meta.url), "utf8"));
+  const declared = new Set(manifest.aiTools.map((t) => t.name));
+  assert.ok(manifest.permissions.includes("ai-tools"));
+  assert.deepEqual(manifest.skills.map((s) => s.id), ["organ-volume", "organ-undo"]);
+  for (const s of manifest.skills) {
+    assert.ok(s.title.ja && s.title.en && s.description.ja && s.description.en, s.id);
+    const keys = new Set(s.inputs.map((i) => i.key));
+    let asked = new Set();
+    for (const st of s.steps) {
+      if (st.kind === "ask") {
+        assert.ok(keys.has(st.input), `${s.id}: ask of an undefined input`);
+        asked.add(st.input);
+      } else if (st.kind === "tool") {
+        assert.ok(st.id.startsWith("plugin:") && declared.has(st.id.slice(7)), `${s.id}: ${st.id} is not one of this plugin's tools`);
+        for (const v of Object.values(st.params)) if (v && typeof v === "object") assert.ok(asked.has(v.$input) || (keys.has(v.$input) && !s.steps.some((x) => x.kind === "ask" && x.input === v.$input)), `${s.id}: input used before it is asked`);
+      } else assert.equal(st.kind, "confirm");
+    }
+  }
+});
+
+test("plugin.json の skills[]: 書き込みのツール（segment_run / segment_undo）を含むスキルは確認の手順を持つ", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const manifest = JSON.parse(await readFile(new URL("./plugin.json", import.meta.url), "utf8"));
+  for (const s of manifest.skills) assert.ok(s.steps.some((st) => st.kind === "confirm"), s.id);
+});
