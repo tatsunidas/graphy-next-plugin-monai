@@ -62,5 +62,78 @@
         "required": []
       }
     }
+  ],
+  "skills": [
+    {
+      "id": "organ-volume",
+      "title": {
+        "ja": "臓器の分割と体積",
+        "en": "Organ segmentation and volume"
+      },
+      "description": {
+        "ja": "臓器名を尋ね、同意のうえで外部の計算機で分割し、結果を ROI マネージャに表示して体積を示します。",
+        "en": "Ask for organ names, segment them on the external compute endpoint after you approve, show the result in the ROI manager and report the volumes."
+      },
+      "inputs": [
+        {
+          "key": "organs",
+          "label": {
+            "ja": "臓器名（カンマ区切り）",
+            "en": "Organ names (comma separated)"
+          },
+          "type": "string",
+          "maxLength": 200,
+          "default": "肝臓, 脾臓"
+        }
+      ],
+      "steps": [
+        {
+          "kind": "ask",
+          "input": "organs"
+        },
+        {
+          "kind": "tool",
+          "id": "plugin:segment_run",
+          "params": {
+            "organs": {
+              "$input": "organs"
+            }
+          }
+        },
+        {
+          "kind": "confirm",
+          "message": {
+            "ja": "結果を表示しました。残す場合は［続ける］、取り消す場合は［ここで止める］のあと、スキル「分割結果の取り消し」を実行してください。",
+            "en": "The result is shown. Press Continue to keep it. To remove it, press Stop here and then run the skill “Remove the segmentation result”."
+          }
+        }
+      ]
+    },
+    {
+      "id": "organ-undo",
+      "title": {
+        "ja": "分割結果の取り消し",
+        "en": "Remove the segmentation result"
+      },
+      "description": {
+        "ja": "このプラグインが表示した分割結果だけを消します。",
+        "en": "Removes only the segmentation result this plugin showed."
+      },
+      "inputs": [],
+      "steps": [
+        {
+          "kind": "confirm",
+          "message": {
+            "ja": "分割結果を消します。よいですか？",
+            "en": "Remove the segmentation result?"
+          }
+        },
+        {
+          "kind": "tool",
+          "id": "plugin:segment_undo",
+          "params": {}
+        }
+      ]
+    }
   ]
 }
