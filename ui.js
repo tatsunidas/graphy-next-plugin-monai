@@ -67,6 +67,18 @@ export const INPUT_ORIENTATION = {
   wholeBrainSeg_Large_UNEST_segmentation: "RAS",
 };
 
+/**
+ * 結果のうち、モデルへ渡した画像が背景の画素のラベルを 0 にする Bundle（名前で引く。ここに無い Bundle は何も変えない）。
+ * "zero" = 画像の値が 0 の画素。モデル自身の NormalizeIntensityd(nonzero=True) が 0 を背景とみなすのと同じ定義で、しきい値は無い。
+ * チャネル 0 の画像だけを見るので、複数チャネルの Bundle は入れない。
+ *  - wholeBrainSeg_Large_UNEST_segmentation: 頭蓋除去済みの入力の背景（値 0）にも余計なラベルが出る。
+ *    MNI305 に位置合わせした 1 例で、ラベルのある画素の 37.2% が画像=0 の画素にあり、除くと脳マスク内が 62.6% → 99.7%
+ *    （2026-11-02、Colab T4）。頭蓋つきの入力は背景が 0 でないので、何も除かれない。
+ */
+export const BACKGROUND_FROM_INPUT = {
+  wholeBrainSeg_Large_UNEST_segmentation: "zero",
+};
+
 /** vista3d で、点と一緒に指定できないラベル（Bundle が下位のラベルに分けるもの。docs/inference.md） */
 /** 点として読む ROI のツール名（本体の点 ROI と Probe） */
 export const POINT_TOOLS = ["GraphyPointROI", "Probe"];
@@ -308,12 +320,27 @@ def to_input_grid(lab, out_affine, ras, nx, ny, nz):
             res[:, :, k] = v.reshape(nx, ny)
         lab = res
     return lab, resampled
+
+
+def mask_background(lab, vol_xyz, mode):
+    """モデルへ渡した画像が背景の画素のラベルを 0 にする。'zero' = 画像の値が 0 の画素（モデル自身の
+    NormalizeIntensityd(nonzero=True) が 0 を背景とみなすのと同じ定義）。lab と vol_xyz は同じ格子の [x, y, z]。
+    消した画素数（ラベルがあったものだけ）も返す"""
+    if mode != 'zero':
+        raise RuntimeError('bad-background: ' + str(mode))
+    if lab.shape != vol_xyz.shape:
+        raise RuntimeError('bad-background: 画像とラベルの形が違います ' + str(lab.shape) + ' ' + str(vol_xyz.shape))
+    bg = (vol_xyz == 0) & (lab != 0)
+    lab = lab.copy()
+    lab[bg] = 0
+    return lab, int(bg.sum())
 `;
 
 export const PY = PY_ENV + PY_ORIENT + String.raw`
 B = GRAPHY['bundle']
 OVR = GRAPHY.get('overrides') or {}
 ORIENT = GRAPHY.get('orientation')   # 入力の軸の並びを揃える Bundle だけ（INPUT_ORIENTATION）。無ければ元の格子のまま
+BG = GRAPHY.get('background')        # 入力が背景の画素のラベルを消す Bundle だけ（BACKGROUND_FROM_INPUT）
 PROMPT = GRAPHY.get('prompt') or {'labels': [], 'points': []}
 T0 = time.time()
 STAGES = {}
@@ -787,6 +814,10 @@ lab = np.rint(lab).astype(np.int32)
 
 # 出力の格子 → 入力の格子（同じなら写すだけ。違えば最近傍で取り直す）
 lab, resampled = to_input_grid(lab, o.affine, ras, nx, ny, nz)
+# 入力が背景（値 0）の画素のラベルを消す。ラベルの集計・保存・本体への返却はこの後の結果になる
+masked_background = 0
+if BG:
+    lab, masked_background = mask_background(lab, vol.transpose(2, 1, 0), BG)
 # vista3d は、点の窓の外（推論していない所）を 255 で返す。臓器ではないので、背景（0）にして数だけ別に返す
 not_inferred = 0
 if prompt_voxels:
@@ -810,6 +841,7 @@ json.dump({
     'outputFile': os.path.relpath(outs[0], work),
     'resampled': bool(resampled),
     'reoriented': ORIENT,
+    'maskedBackground': masked_background if BG else None,
     'overrides': OVR,
     'prompt': {'labels': PROMPT.get('labels') or [], 'points': prompt_voxels},
     'bundleCodePatched': bundle_patched,
@@ -936,7 +968,8 @@ export function buildScript(bundle, overrides = {}, channels = 1, prompt = null)
   if (!Number.isInteger(channels) || channels < 1 || channels > 8) throw new Error("bad-channels");
   const short = bundle.name.split("/").pop();
   const orientation = Object.hasOwn(INPUT_ORIENTATION, short) ? INPUT_ORIENTATION[short] : undefined;
-  const cfg = JSON.stringify({ bundle: { name: bundle.name, version: bundle.version ?? null }, overrides, channels, prompt, guidanceChannels: PROMPTS[bundle.name.split("/").pop()]?.guidanceChannels ?? 0, ...(orientation ? { orientation } : {}) });
+  const background = Object.hasOwn(BACKGROUND_FROM_INPUT, short) ? BACKGROUND_FROM_INPUT[short] : undefined;
+  const cfg = JSON.stringify({ bundle: { name: bundle.name, version: bundle.version ?? null }, overrides, channels, prompt, guidanceChannels: PROMPTS[bundle.name.split("/").pop()]?.guidanceChannels ?? 0, ...(orientation ? { orientation } : {}), ...(background ? { background } : {}) });
   return `GRAPHY = __import__('json').loads(${JSON.stringify(cfg)})\n` + PY;
 }
 

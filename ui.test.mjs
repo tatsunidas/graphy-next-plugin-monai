@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activate, INPUT_ORIENTATION, PY_ORIENT, PY_ENV, PY_PROBE, buildProbeScript, installCommand, missingPackages, NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
+import { activate, BACKGROUND_FROM_INPUT, INPUT_ORIENTATION, PY_ORIENT, PY_ENV, PY_PROBE, buildProbeScript, installCommand, missingPackages, NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -232,6 +232,16 @@ test("INPUT_ORIENTATION: only the measured bundle gets its input axes reordered;
   }
 });
 
+test("BACKGROUND_FROM_INPUT: only the measured bundle gets its background labels removed; the others' settings are unchanged", () => {
+  assert.deepEqual(BACKGROUND_FROM_INPUT, { wholeBrainSeg_Large_UNEST_segmentation: "zero" });
+  const first = (name) => buildScript({ name }).split("\n")[0];
+  assert.match(first("wholeBrainSeg_Large_UNEST_segmentation"), /\\"background\\":\\"zero\\"/);
+  assert.match(first("MONAI/wholeBrainSeg_Large_UNEST_segmentation"), /\\"background\\":\\"zero\\"/);
+  for (const name of ["spleen_ct_segmentation", "wholeBody_ct_segmentation", "vista3d", "brats_mri_segmentation", "constructor", "toString"]) {
+    assert.doesNotMatch(first(name), /background/, name);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // PY_ORIENT の往復（偽の MONAI は要らない。nibabel・numpy のある Python で）
 // ---------------------------------------------------------------------------
@@ -278,6 +288,46 @@ except RuntimeError as e:
     assert 'bad-orientation' in str(e)
 print('ok', len(cases))
 `;
+
+// 入力が背景（値 0）の画素のラベルだけが消える。形が [x, y, z] の画像とラベルを、転置の取り違えが見える大きさで試す
+const MASK_PY = `
+import numpy as np
+${PY_ORIENT}
+rng = np.random.default_rng(2)
+vol = rng.integers(1, 1000, size=(9, 7, 6)).astype(np.float32)      # [x, y, z]
+vol[:3] = 0                                                         # 背景の塊
+vol[rng.random(vol.shape) < 0.1] = 0                                # 点々の 0 も
+lab = rng.integers(0, 6, size=vol.shape).astype(np.int32)
+before = lab.copy()
+out, n = mask_background(lab, vol, 'zero')
+assert np.array_equal(lab, before), 'input was modified'
+assert (out[vol == 0] == 0).all()
+assert np.array_equal(out[vol != 0], lab[vol != 0]), 'inside changed'
+assert n == int(((vol == 0) & (lab != 0)).sum()) and n > 0, n
+assert out.shape == lab.shape and out.dtype == lab.dtype
+# 負例 1: 軸を取り違えた画像（[z, y, x]）は形が違うので止まる
+try:
+    mask_background(lab, vol.transpose(2, 1, 0), 'zero'); raise SystemExit('wrong-shape accepted')
+except RuntimeError as e:
+    assert 'bad-background' in str(e)
+# 負例 2: 形が同じでも軸を取り違えると結果が変わる（この検査が落ちる検査であること）
+cube = (rng.integers(1, 9, size=(5, 5, 5))).astype(np.float32); cube[:2, :, :] = 0
+cl = np.ones((5, 5, 5), np.int32)
+good, _ = mask_background(cl, cube, 'zero'); bad, _ = mask_background(cl, cube.transpose(2, 1, 0), 'zero')
+assert not np.array_equal(good, bad), 'negative control did not fail'
+for mode in (None, '', 'nonzero', 'ZERO'):
+    try:
+        mask_background(lab, vol, mode); raise SystemExit('bad mode accepted: %r' % (mode,))
+    except RuntimeError as e:
+        assert 'bad-background' in str(e)
+print('ok')
+`;
+
+test("PY_ORIENT mask_background removes labels only where the input is 0, keeps the inside, and rejects a wrong shape or mode", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const r = spawnSync(PYTHON, ["-I", "-c", MASK_PY], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ok/);
+});
 
 test("PY_ORIENT reorders to RAS without interpolation and maps results back to the input grid (oblique, sagittal, flipped; with a failing negative control)", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
   const r = spawnSync(PYTHON, ["-I", "-c", ORIENT_PY], { encoding: "utf8" });
@@ -361,6 +411,8 @@ def run(config_file, meta_file, bundle_root, dataset_dir, output_dir, datalist=N
         lab = lab[::-1]
         f = np.eye(4); f[0, 0] = -1; f[0, 3] = a.shape[0] - 1
         aff = aff @ f
+    elif mode == 'allfg':   # 背景も含めて全画素に非ゼロのラベル（背景の除去を確かめる）
+        lab = np.ones(a.shape, np.uint8)
     elif mode == 'onehot':  # チャネルごとの one-hot
         lab = np.stack([lab == 0, lab == 1, lab == 2], -1).astype(np.float32)
     os.makedirs(os.path.join(output_dir, 'image'), exist_ok=True)
@@ -472,7 +524,7 @@ assert v[3, 2, 1] == 1000 and v[7, 5, 4] == 2000
 
 // 向きを揃える Bundle: モデルが受け取る NIfTI は RAS 並び（偽の run が確かめる）。返ったラベルは元の格子で、目印が同じ場所に来る。
 // 入力の向き（配列の軸）: rot = 斜めの LPS 並び、sag = (P,S,R)（矢状断。IXI の元の並び）、ras = (R,A,S)（揃え済み）
-function runFakePy({ name, dir, wantAxcodes, prompt = null }) {
+function runFakePy({ name, dir, wantAxcodes, prompt = null, mode = "same" }) {
   const dir0 = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
   try {
     const lib = path.join(dir0, "lib");
@@ -489,7 +541,7 @@ function runFakePy({ name, dir, wantAxcodes, prompt = null }) {
     const env = {
       ...process.env,
       PYTHONPATH: [lib, process.env.GRAPHY_TEST_PYTHONPATH].filter(Boolean).join(path.delimiter),
-      FAKE_BUNDLE_SRC: bundle, FAKE_MODE: "same", FAKE_DIR: dir, FAKE_WANT_AXCODES: wantAxcodes,
+      FAKE_BUNDLE_SRC: bundle, FAKE_MODE: mode, FAKE_DIR: dir, FAKE_WANT_AXCODES: wantAxcodes,
       WANT_NO_WEIGHTS_ONLY: "1", HOME: dir0, USERPROFILE: dir0, PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8",
     };
     delete env.COLAB_RELEASE_TAG;
@@ -530,6 +582,28 @@ test("PY leaves the input grid alone for a bundle that is not in INPUT_ORIENTATI
   assert.equal(ok.summary.reoriented ?? null, null);
   assert.equal(ok.summary.resampled, false);
   assert.deepEqual([...ok.labels.data], [...ok.expected.data]);
+});
+
+for (const dir of ["rot", "sag", "ras"]) {
+  test(`PY removes the labels on background (input 0) pixels for wholeBrainSeg, in the input grid, together with the reorientation (${dir})`, { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+    // 偽の推論は全画素に 1 を返す。入力が 0 でない 3 画素（vol[1,2,3]・vol[4,5,7]・vol[2,0,8]）だけに残るはず
+    const { r, labels, expected, summary } = runFakePy({ name: "wholeBrainSeg_Large_UNEST_segmentation", dir, wantAxcodes: "RAS", mode: "allfg" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(labels.shape, [6, 7, 9]);
+    assert.deepEqual([...labels.data].map((v) => (v > 0 ? 1 : 0)), [...expected.data].map((v) => (v > 0 ? 1 : 0)));
+    assert.deepEqual([...labels.data].filter((v) => v > 0), [1, 1, 1]);
+    assert.equal(summary.maskedBackground, 6 * 7 * 9 - 3);
+    assert.deepEqual(summary.labels, { 0: 6 * 7 * 9 - 3, 1: 3 });
+    assert.equal(summary.reoriented, "RAS");
+  });
+}
+
+test("PY keeps every label for a bundle that is not in BACKGROUND_FROM_INPUT (negative control: the same all-foreground output is not cleaned)", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const { r, labels, summary } = runFakePy({ name: "fake_bundle", dir: "sag", wantAxcodes: "", mode: "allfg" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual([...labels.data].filter((v) => v > 0).length, 6 * 7 * 9);
+  assert.equal(summary.maskedBackground ?? null, null);
+  assert.deepEqual(summary.labels, { 1: 6 * 7 * 9 });
 });
 
 test("PY refuses to reorient a bundle that takes label numbers or points (and runs when there are none: negative control)", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
