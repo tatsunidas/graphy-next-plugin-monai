@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activate, PY_ENV, PY_PROBE, buildProbeScript, installCommand, missingPackages, NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
+import { activate, INPUT_ORIENTATION, PY_ORIENT, PY_ENV, PY_PROBE, buildProbeScript, installCommand, missingPackages, NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -221,10 +221,73 @@ test("buildScript embeds only the bundle settings and passes the code inspector 
   assert.match(code.split("\n")[0], /^GRAPHY = __import__\('json'\)\.loads\(".*wholeBody_ct_segmentation.*displayable_configs#highres.*"\)$/);
 });
 
+test("INPUT_ORIENTATION: only the measured bundle gets its input axes reordered; the others' scripts are unchanged", () => {
+  assert.deepEqual(INPUT_ORIENTATION, { wholeBrainSeg_Large_UNEST_segmentation: "RAS" });
+  const first = (name) => buildScript({ name }).split("\n")[0];
+  assert.match(first("wholeBrainSeg_Large_UNEST_segmentation"), /\\"orientation\\":\\"RAS\\"/);
+  assert.match(first("MONAI/wholeBrainSeg_Large_UNEST_segmentation"), /\\"orientation\\":\\"RAS\\"/);
+  // 他の Bundle・継承されたキーの名前には何も足さない（設定の文字列が従来と同じ）
+  for (const name of ["spleen_ct_segmentation", "wholeBody_ct_segmentation", "vista3d", "brats_mri_segmentation", "constructor", "toString"]) {
+    assert.doesNotMatch(first(name), /orientation/, name);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PY_ORIENT の往復（偽の MONAI は要らない。nibabel・numpy のある Python で）
+// ---------------------------------------------------------------------------
+const PYTHON = process.env.GRAPHY_TEST_PYTHON;
+
+// 配列の 3 軸の患者方向（LPS）の組ごとに、乱数の画像を「揃える → 出力として元の格子へ戻す」と、元と同じになること。
+// 軸は NIfTI の RAS の向きで書く: 'R','A','S' は + 側、'L','P','I' は − 側。tilt = 軸を傾ける（IXI は約 7 度の斜め）
+const ORIENT_PY = `
+import itertools, numpy as np, nibabel as nib
+${PY_ORIENT}
+AX = {'R': (0, 1), 'L': (0, -1), 'A': (1, 1), 'P': (1, -1), 'S': (2, 1), 'I': (2, -1)}
+def affine(codes, spacing, tilt_deg):
+    a = np.zeros((4, 4)); a[3, 3] = 1
+    for col, (c, sp) in enumerate(zip(codes, spacing)):
+        ax, sg = AX[c]; a[ax, col] = sg * sp
+    t = np.deg2rad(tilt_deg); c, s = np.cos(t), np.sin(t)
+    rot = np.array([[1, 0, 0], [0, c, -s], [0, s, c]])      # R 軸まわりの傾き
+    a[:3, :3] = rot @ a[:3, :3]
+    a[:3, 3] = [-80.5, -120.25, -60.0]
+    return a
+rng = np.random.default_rng(1)
+cases = [('RAS', 0), ('LPS', 0), ('LAI', 0), ('PSR', 0), ('PSR', 7), ('SAL', 0), ('IRP', 12)]
+for codes, tilt in cases:
+    sp = (1.0, 0.9375, 1.2)
+    vol = rng.integers(1, 1000, size=(9, 7, 6)).astype(np.float32)        # [col, row, slice]（NIfTI の配列）
+    a = affine(codes, sp, tilt)
+    img = nib.Nifti1Image(vol, a)
+    out = reorient(img, 'RAS')
+    assert ''.join(nib.aff2axcodes(out.affine)) == 'RAS', (codes, nib.aff2axcodes(out.affine))
+    assert sorted(out.shape) == sorted(vol.shape)
+    assert sorted(np.asanyarray(out.dataobj).ravel()) == sorted(vol.ravel())   # 値は並べ替わるだけ（補間なし）
+    lab = np.asanyarray(out.dataobj).astype(np.int32)        # 偽の推論: 画像をそのままラベルにする
+    back, resampled = to_input_grid(lab, out.affine, a, *vol.shape)
+    assert np.array_equal(back, vol.astype(np.int32)), (codes, tilt)
+    assert resampled == (codes != 'RAS'), (codes, resampled)
+    # 負例: 戻しの変換が 1 つ違うと、一致しない（この検査が落ちる検査であること）
+    bad = a.copy(); bad[:3, 0] = -bad[:3, 0]
+    wrong, _ = to_input_grid(lab, out.affine, bad, *vol.shape)
+    assert not np.array_equal(wrong, vol.astype(np.int32)), ('negative control did not fail', codes)
+try:
+    reorient(nib.Nifti1Image(np.zeros((2, 2, 2), np.float32), np.eye(4)), 'LPS')
+    raise SystemExit('bad code accepted')
+except RuntimeError as e:
+    assert 'bad-orientation' in str(e)
+print('ok', len(cases))
+`;
+
+test("PY_ORIENT reorders to RAS without interpolation and maps results back to the input grid (oblique, sagittal, flipped; with a failing negative control)", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const r = spawnSync(PYTHON, ["-I", "-c", ORIENT_PY], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ok 7/);
+});
+
 // ---------------------------------------------------------------------------
 // PY の往復（偽の MONAI で）
 // ---------------------------------------------------------------------------
-const PYTHON = process.env.GRAPHY_TEST_PYTHON;
 
 const FAKE_MONAI = {
   "monai/__init__.py": "__version__ = '0.0-fake'\n",
@@ -285,6 +348,9 @@ def run(config_file, meta_file, bundle_root, dataset_dir, output_dir, datalist=N
         assert isinstance(first, str), ('want path datalist', datalist)
     assert (os.environ.get('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD') or '') == (os.environ.get('WANT_NO_WEIGHTS_ONLY') or ''), 'weights_only env'
     img = nib.load(first)
+    want = os.environ.get('FAKE_WANT_AXCODES')
+    if want:
+        assert ''.join(nib.aff2axcodes(img.affine)) == want, ('axcodes', nib.aff2axcodes(img.affine), want)
     a = np.asanyarray(img.dataobj)
     lab = (a > 500).astype(np.uint8) + (a > 1500).astype(np.uint8)
     if os.environ.get('FAKE_NOT_INFERRED'):
@@ -305,13 +371,15 @@ def run(config_file, meta_file, bundle_root, dataset_dir, output_dir, datalist=N
 const MAKE_INPUT = `
 import json, os, numpy as np
 c, s = np.cos(np.pi / 6), np.sin(np.pi / 6)
+DIRS = {'rot': [[c, s, 0], [-s, c, 0], [0, 0, 1.0]], 'sag': [[0, 1, 0], [0, 0, 1], [-1, 0, 0]], 'ras': [[-1, 0, 0], [0, -1, 0], [0, 0, 1.0]]}
+D = np.array(DIRS[os.environ.get('FAKE_DIR', 'rot')], float)   # 配列の 3 軸の患者方向（LPS）。sag = (P,S,R)、ras = (R,A,S)
 vol = np.zeros((6, 7, 9), np.float32)   # [z, y, x]
 vol[1, 2, 3] = 1000                     # 非対称な目印
 vol[4, 5, 7] = 2000
 vol[2, 0, 8] = 700
 os.makedirs('inputs', exist_ok=True); os.makedirs('outputs', exist_ok=True)
 np.savez('inputs/0.npz', volume=vol, spacing=np.array([2.5, 0.8, 0.7]), origin=np.array([-100.0, -120.0, 50.0]),
-         direction=np.array([[c, s, 0], [-s, c, 0], [0, 0, 1.0]]))
+         direction=D)
 np.save('expected.npy', ((vol > 500).astype(np.uint8) + (vol > 1500).astype(np.uint8)))
 import zipfile
 with zipfile.ZipFile('inputs/0.npz', 'a') as zf:
@@ -319,7 +387,7 @@ with zipfile.ZipFile('inputs/0.npz', 'a') as zf:
 for i in range(1, int(os.environ.get('FAKE_NCH', '1'))):
     v2 = vol[:, :, :-1] if os.environ.get('FAKE_BAD_GRID') == str(i) else vol
     np.savez('inputs/%d.npz' % i, volume=v2, spacing=np.array([2.5, 0.8, 0.7]), origin=np.array([-100.0, -120.0, 50.0]),
-             direction=np.array([[c, s, 0], [-s, c, 0], [0, 0, 1.0]]))
+             direction=D)
     with zipfile.ZipFile('inputs/%d.npz' % i, 'a') as zf:
         zf.writestr('meta.json', json.dumps({'format': 'graphy-npz/1', 'modality': os.environ.get('FAKE_MODALITY_%d' % i, os.environ.get('FAKE_MODALITY', 'CT'))}))
 `;
@@ -401,6 +469,77 @@ assert v[3, 2, 1] == 1000 and v[7, 5, 4] == 2000
     }
   });
 }
+
+// 向きを揃える Bundle: モデルが受け取る NIfTI は RAS 並び（偽の run が確かめる）。返ったラベルは元の格子で、目印が同じ場所に来る。
+// 入力の向き（配列の軸）: rot = 斜めの LPS 並び、sag = (P,S,R)（矢状断。IXI の元の並び）、ras = (R,A,S)（揃え済み）
+function runFakePy({ name, dir, wantAxcodes, prompt = null }) {
+  const dir0 = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));
+  try {
+    const lib = path.join(dir0, "lib");
+    for (const [p, body] of Object.entries(FAKE_MONAI)) {
+      fs.mkdirSync(path.dirname(path.join(lib, p)), { recursive: true });
+      fs.writeFileSync(path.join(lib, p), body);
+    }
+    const bundle = path.join(dir0, "bundle");
+    fs.mkdirSync(path.join(bundle, "configs"), { recursive: true });
+    fs.writeFileSync(path.join(bundle, "configs", "metadata.json"), JSON.stringify(spleenMeta));
+    fs.writeFileSync(path.join(bundle, "configs", "inference.json"), JSON.stringify({ datalist: [], output_dir: "x", dataset: { data: "$[{'image': i} for i in @datalist]" }, run: ["$@evaluator.run()"] }));
+    const run = path.join(dir0, "run");
+    fs.mkdirSync(run);
+    const env = {
+      ...process.env,
+      PYTHONPATH: [lib, process.env.GRAPHY_TEST_PYTHONPATH].filter(Boolean).join(path.delimiter),
+      FAKE_BUNDLE_SRC: bundle, FAKE_MODE: "same", FAKE_DIR: dir, FAKE_WANT_AXCODES: wantAxcodes,
+      WANT_NO_WEIGHTS_ONLY: "1", HOME: dir0, USERPROFILE: dir0, PIP_NO_INDEX: "1", PYTHONIOENCODING: "utf-8",
+    };
+    delete env.COLAB_RELEASE_TAG;
+    delete env.TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD;
+    const py = (code) => spawnSync(PYTHON, ["-c", code], { cwd: run, env, encoding: "utf8" });
+    assert.equal(py(MAKE_INPUT).status, 0);
+    const r = py(buildScript({ name }, {}, 1, prompt));
+    let labels = null, expected = null, summary = null;
+    if (r.status === 0) {
+      labels = parseNpy(new Uint8Array(fs.readFileSync(path.join(run, "outputs", "labels.npy"))));
+      expected = parseNpy(new Uint8Array(fs.readFileSync(path.join(run, "expected.npy"))));
+      summary = JSON.parse(fs.readFileSync(path.join(run, "outputs", "labels.json"), "utf8"));
+    }
+    return { r, labels, expected, summary };
+  } finally {
+    fs.rmSync(dir0, { recursive: true, force: true });
+  }
+}
+
+for (const dir of ["rot", "sag", "ras"]) {
+  test(`PY reorders the input to RAS for wholeBrainSeg and returns the labels in the input grid (${dir})`, { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+    const { r, labels, expected, summary } = runFakePy({ name: "wholeBrainSeg_Large_UNEST_segmentation", dir, wantAxcodes: "RAS" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(labels.shape, [6, 7, 9]);
+    assert.deepEqual([...labels.data], [...expected.data]);
+    assert.equal(summary.reoriented, "RAS");
+    assert.equal(summary.resampled, dir !== "ras");
+    assert.deepEqual(summary.labels, { 0: 6 * 7 * 9 - 3, 1: 2, 2: 1 });
+  });
+}
+
+test("PY leaves the input grid alone for a bundle that is not in INPUT_ORIENTATION (and the RAS check fails on it: negative control)", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  const bad = runFakePy({ name: "fake_bundle", dir: "sag", wantAxcodes: "RAS" });
+  assert.notEqual(bad.r.status, 0, "RAS を要求しても、表に無い Bundle は揃えない");
+  assert.match(bad.r.stderr, /axcodes/);
+  const ok = runFakePy({ name: "fake_bundle", dir: "sag", wantAxcodes: "" });
+  assert.equal(ok.r.status, 0, ok.r.stderr);
+  assert.equal(ok.summary.reoriented ?? null, null);
+  assert.equal(ok.summary.resampled, false);
+  assert.deepEqual([...ok.labels.data], [...ok.expected.data]);
+});
+
+test("PY refuses to reorient a bundle that takes label numbers or points (and runs when there are none: negative control)", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
+  // 点の添字は元の格子で数えるので、揃えた画像とは組み合わせない
+  const r = runFakePy({ name: "wholeBrainSeg_Large_UNEST_segmentation", dir: "rot", wantAxcodes: "RAS", prompt: { labels: [3], points: [] } });
+  assert.notEqual(r.r.status, 0);
+  assert.match(r.r.stderr, /prompt-orientation/);
+  const ok = runFakePy({ name: "wholeBrainSeg_Large_UNEST_segmentation", dir: "rot", wantAxcodes: "RAS" });
+  assert.equal(ok.r.status, 0, ok.r.stderr);
+});
 
 test("PY does not install packages outside Colab", { skip: !PYTHON && "GRAPHY_TEST_PYTHON is not set" }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "graphy-monai-"));

@@ -56,6 +56,17 @@ export const PROMPTS = {
   spleen_deepedit_annotation: { labels: false, points: true, guidanceChannels: 2 },
 };
 
+/**
+ * 入力の配列の軸を揃えて渡す Bundle（名前で引く。ここに無い Bundle は元の格子のまま渡す）。
+ * Bundle 自身が Orientationd（RAS）を持つ spleen・wholeBody・swin_unetr・renalStructures・prostate・vista3d・DeepEdit は要らない。
+ * 持たない Bundle は、軸の期待が Bundle の資料に無いので、実測した Bundle だけを入れる（他は未測定）。
+ *  - wholeBrainSeg_Large_UNEST_segmentation: 配列の第 1 軸が患者の右へ増える並び（RAS）で左右ラベルが合う。
+ *    MNI305 に位置合わせした 1 例で 62 組中 57 組が合い、(L,P,S)・(L,A,I) では 1 組（2026-11-02、Colab T4）。
+ */
+export const INPUT_ORIENTATION = {
+  wholeBrainSeg_Large_UNEST_segmentation: "RAS",
+};
+
 /** vista3d で、点と一緒に指定できないラベル（Bundle が下位のラベルに分けるもの。docs/inference.md） */
 /** 点として読む ROI のツール名（本体の点 ROI と Probe） */
 export const POINT_TOOLS = ["GraphyPointROI", "Probe"];
@@ -265,9 +276,44 @@ def importable(mod):
 COLAB = bool(os.environ.get('COLAB_RELEASE_TAG')) or importable('google.colab')
 `;
 
-export const PY = PY_ENV + String.raw`
+/**
+ * 入力の向きを揃える・結果を元の格子へ戻す（本処理だけが使う。単体でも試せるように PY から分けてある）。
+ * 揃えるのは Colab の上で NIfTI を書く直前だけで、本体の画像・IOP・IPP・ROI・SEG の座標は変えない。
+ */
+export const PY_ORIENT = String.raw`
+def reorient(img, code):
+    """配列の軸を code の並びへ揃える。軸の入れ替えと反転だけで、補間しない（affine も一緒に更新される）。
+    'RAS' = 第 1 軸が患者の右へ、第 2 軸が前へ、第 3 軸が上へ増える並び"""
+    import nibabel as nib
+    if code != 'RAS':
+        raise RuntimeError('bad-orientation: ' + str(code))
+    return nib.as_closest_canonical(img)
+
+
+def to_input_grid(lab, out_affine, ras, nx, ny, nz):
+    """出力の格子 → 入力の格子（同じなら写すだけ。違えば最近傍で取り直す）。ras は入力の格子の添字 → RAS"""
+    import numpy as np
+    m = np.linalg.inv(out_affine) @ ras
+    resampled = not (lab.shape == (nx, ny, nz) and np.allclose(m, np.eye(4), atol=1e-3))
+    if resampled:
+        # 先に整数へ丸める（端の画素が計算誤差で -1e-12 になり、範囲外として落ちないように）
+        res = np.zeros((nx, ny, nz), np.int32)
+        ii, jj = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+        for k in range(nz):
+            p = m @ np.stack([ii.ravel(), jj.ravel(), np.full(ii.size, k), np.ones(ii.size)])
+            q = np.rint(p[:3]).astype(np.int64)
+            inside = np.all((q >= 0) & (q < np.array(lab.shape)[:, None]), axis=0)
+            v = np.zeros(ii.size, np.int32)
+            v[inside] = lab[q[0, inside], q[1, inside], q[2, inside]]
+            res[:, :, k] = v.reshape(nx, ny)
+        lab = res
+    return lab, resampled
+`;
+
+export const PY = PY_ENV + PY_ORIENT + String.raw`
 B = GRAPHY['bundle']
 OVR = GRAPHY.get('overrides') or {}
+ORIENT = GRAPHY.get('orientation')   # 入力の軸の並びを揃える Bundle だけ（INPUT_ORIENTATION）。無ければ元の格子のまま
 PROMPT = GRAPHY.get('prompt') or {'labels': [], 'points': []}
 T0 = time.time()
 STAGES = {}
@@ -619,6 +665,8 @@ img = nib.Nifti1Image(np.ascontiguousarray(vol.transpose(2, 1, 0)), ras)
 img.set_qform(ras, 1)
 img.set_sform(ras, 1)
 img.header.set_xyzt_units('mm')
+if ORIENT:
+    img = reorient(img, ORIENT)
 image_path = os.path.join(work, 'in', 'image.nii.gz')
 nib.save(img, image_path)
 image_paths = [image_path]
@@ -632,6 +680,8 @@ for i in range(1, N_CH):
     imgi.set_qform(ras, 1)
     imgi.set_sform(ras, 1)
     imgi.header.set_xyzt_units('mm')
+    if ORIENT:
+        imgi = reorient(imgi, ORIENT)
     pi = os.path.join(work, 'in', 'image_%d.nii.gz' % i)
     nib.save(imgi, pi)
     image_paths.append(pi)
@@ -652,6 +702,9 @@ kw[datalist_key(cfg0)] = datalist_multi(cfg0, image_paths) if N_CH > 1 else data
 # ラベル番号・点を受けるモデル（vista3d: input_dict、DeepEdit: dataset#data）。点は患者座標（LPS, mm）→ 元の画像の添字
 prompt_voxels = None
 bundle_patched = []
+if ORIENT and (prompt_style(cfg0) or PROMPT.get('labels') or PROMPT.get('points')):
+    # 点の添字は元の格子で数える（prompt_inputs）。揃えた画像とは食い違うので、組み合わせは対応していない
+    raise RuntimeError('prompt-orientation: 向きを揃えるモデルは、ラベル番号・点を受け取れません')
 if prompt_style(cfg0):
     prompt_voxels, prompt_kw = prompt_inputs(cfg0, PROMPT, image_path, lps, (nx, ny, nz))
     kw.update(prompt_kw)
@@ -733,20 +786,7 @@ if lab.ndim != 3:
 lab = np.rint(lab).astype(np.int32)
 
 # 出力の格子 → 入力の格子（同じなら写すだけ。違えば最近傍で取り直す）
-m = np.linalg.inv(o.affine) @ ras
-resampled = not (lab.shape == (nx, ny, nz) and np.allclose(m, np.eye(4), atol=1e-3))
-if resampled:
-    # 先に整数へ丸める（端の画素が計算誤差で -1e-12 になり、範囲外として落ちないように）
-    res = np.zeros((nx, ny, nz), np.int32)
-    ii, jj = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
-    for k in range(nz):
-        p = m @ np.stack([ii.ravel(), jj.ravel(), np.full(ii.size, k), np.ones(ii.size)])
-        q = np.rint(p[:3]).astype(np.int64)
-        inside = np.all((q >= 0) & (q < np.array(lab.shape)[:, None]), axis=0)
-        v = np.zeros(ii.size, np.int32)
-        v[inside] = lab[q[0, inside], q[1, inside], q[2, inside]]
-        res[:, :, k] = v.reshape(nx, ny)
-    lab = res
+lab, resampled = to_input_grid(lab, o.affine, ras, nx, ny, nz)
 # vista3d は、点の窓の外（推論していない所）を 255 で返す。臓器ではないので、背景（0）にして数だけ別に返す
 not_inferred = 0
 if prompt_voxels:
@@ -769,6 +809,7 @@ json.dump({
     'geometry': {'spacing': sp.tolist(), 'origin': org.tolist(), 'direction': dr.tolist()},
     'outputFile': os.path.relpath(outs[0], work),
     'resampled': bool(resampled),
+    'reoriented': ORIENT,
     'overrides': OVR,
     'prompt': {'labels': PROMPT.get('labels') or [], 'points': prompt_voxels},
     'bundleCodePatched': bundle_patched,
@@ -893,7 +934,9 @@ export function missingPackages(errorValue) {
 export function buildScript(bundle, overrides = {}, channels = 1, prompt = null) {
   if (!NAME_RE.test(bundle.name)) throw new Error("bad-bundle-name");
   if (!Number.isInteger(channels) || channels < 1 || channels > 8) throw new Error("bad-channels");
-  const cfg = JSON.stringify({ bundle: { name: bundle.name, version: bundle.version ?? null }, overrides, channels, prompt, guidanceChannels: PROMPTS[bundle.name.split("/").pop()]?.guidanceChannels ?? 0 });
+  const short = bundle.name.split("/").pop();
+  const orientation = Object.hasOwn(INPUT_ORIENTATION, short) ? INPUT_ORIENTATION[short] : undefined;
+  const cfg = JSON.stringify({ bundle: { name: bundle.name, version: bundle.version ?? null }, overrides, channels, prompt, guidanceChannels: PROMPTS[bundle.name.split("/").pop()]?.guidanceChannels ?? 0, ...(orientation ? { orientation } : {}) });
   return `GRAPHY = __import__('json').loads(${JSON.stringify(cfg)})\n` + PY;
 }
 
