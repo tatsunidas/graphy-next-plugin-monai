@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-import { activate, BACKGROUND_FROM_INPUT, INPUT_ORIENTATION, PY_ORIENT, PY_ENV, PY_PROBE, buildProbeScript, installCommand, missingPackages, NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
+import { activate, BACKGROUND_FROM_INPUT, PY_MEMORY, gpuMemoryHint, memoryModeNote, INPUT_ORIENTATION, PY_ORIENT, PY_ENV, PY_PROBE, buildProbeScript, installCommand, missingPackages, NOT_YET, PROMPTS, RAN, buildPrompt, parsePoints, promptProblem, roiToLps, vistaLabelOptions, REFRESH_PY, ZOO, channelPlan, loadKeysOf, LABEL_NAMES, settingFields, settingOverrides, buildScript, classify, colorFor, judge, labelTable, mapSlices, parseNpy, reorderLabels, validBundleName, zooEntry } from "./ui.js";
 
 function npy(descr, shape, bytes) {
   let header = `{'descr': '${descr}', 'fortran_order': False, 'shape': (${shape.join(", ")}${shape.length === 1 ? "," : ""}), }`;
@@ -1131,4 +1131,105 @@ test("画面: 事前チェックが断られたら理由を出し、本処理は
   await container.find("monai-run").handlers.click();
   assert.equal(calls.length, 1);
   assert.match(container.find("monai-status").textContent, /失敗/);
+});
+
+// ---------------------------------------------------------------------------
+// GPU メモリ不足の見込み（softmax を省く判断）。標準ライブラリだけの Python で試す（numpy 不要）
+// ---------------------------------------------------------------------------
+const MEM_PYTHON = process.env.GRAPHY_TEST_PYTHON || "python3";
+const FIXTURE = (n) => fs.readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8");
+const runMem = (body, input = "") => spawnSync(MEM_PYTHON, ["-I", "-c", `import sys, json\n${PY_MEMORY}\n${body}`], { input, encoding: "utf8" });
+
+test("PY_MEMORY: 出力の大きさの見積りが、第 901 回の実測（150 枚 5.04 GiB・343 枚 11.52 GiB・OOM の要求 12369002496 バイト）と合う", () => {
+  const r = runMem(`
+vox = lambda n: 293 * 293 * n * 1.5 ** 3          # 再標本化後 1.5 mm の物理的な大きさ（mm³）
+e150 = estimate_output_bytes(vox(150), [1.5, 1.5, 1.5], 105)
+e343 = estimate_output_bytes(vox(343), 1.5, 105)  # 数値 1 つでも同じ
+assert abs(e150 / GIB - 5.04) < 0.01, e150 / GIB
+assert abs(e343 / GIB - 11.52) < 0.01, e343 / GIB
+assert abs(e343 - 12369002496) / 12369002496 < 1e-3, e343     # 失敗時に PyTorch が要求した量
+# 脾臓（2 チャンネル）は小さい
+assert estimate_output_bytes(vox(343), [1.5, 1.5, 1.5], 2) / GIB < 0.25
+print('ok')
+`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ok/);
+});
+
+test("PY_MEMORY: pixdim が数値でない・壊れている・チャンネルや大きさが分からないときは見積もらない（None）", () => {
+  const r = runMem(`
+for bad in ("$[1.5, 1.5, 1.5] if @displayable_configs#highres else [3.0, 3.0, 3.0]", True, None, [1.5, 1.5], [0, 1, 1], [-1.5, 1, 1],
+            [float('nan')] * 3, [float('inf')] * 3, 0, "1.5", {'a': 1}):
+    assert estimate_output_bytes(1e8, bad, 105) is None, bad
+assert estimate_output_bytes(1e8, 1.5, 0) is None and estimate_output_bytes(1e8, 1.5, None) is None
+assert estimate_output_bytes(0, 1.5, 105) is None and estimate_output_bytes(-1, 1.5, 105) is None
+print('ok')
+`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ok/);
+});
+
+test("PY_MEMORY plan_memory: 150 枚（成功した実績）は今までの方式、343 枚（落ちた）だけ softmax を省く。分からないときは変えない", () => {
+  const r = runMem(`
+free = 14.46 * GIB                                  # T4 の空き（実測）
+assert plan_memory(5.04 * GIB, free) == 'default'   # 150 枚は成功した
+assert plan_memory(11.52 * GIB, free) == 'no-softmax'   # 343 枚は OOM だった
+assert plan_memory(0.2 * GIB, free) == 'default'    # 脾臓
+assert plan_memory(None, free) == 'default' and plan_memory(5 * GIB, None) == 'default' and plan_memory(5 * GIB, 0) == 'default'
+# 境界: 2 倍 ＋ 余白がちょうど 9 割に収まるかどうか
+edge = (free * FIT_RATIO - OVERHEAD_BYTES) / 2
+assert plan_memory(edge, free) == 'default' and plan_memory(edge + 1024, free) == 'no-softmax'
+print('ok')
+`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ok/);
+});
+
+test("PY_MEMORY softmax_override_path: 公式の wholeBody の設定で見つかり、並びが違う設定は触らない（負例）", () => {
+  const r = runMem(`
+import copy
+cfg = json.load(sys.stdin)
+assert softmax_override_path(cfg) == 'postprocessing#transforms#0#softmax', softmax_override_path(cfg)
+def mut(f):
+    c = copy.deepcopy(cfg); f(c); return softmax_override_path(c)
+tr = lambda c: c['postprocessing']['transforms']
+assert mut(lambda c: tr(c)[0].__setitem__('softmax', False)) is None            # 既に外れている
+assert mut(lambda c: tr(c).pop(1)) is None                                       # 直後に argmax が無い
+assert mut(lambda c: tr(c).__setitem__(slice(0, 2), [tr(c)[1], tr(c)[0]])) is None   # 順序が逆
+assert mut(lambda c: tr(c)[1].__setitem__('keys', 'other')) is None              # 別の keys
+assert mut(lambda c: tr(c)[1].__setitem__('argmax', False)) is None
+assert mut(lambda c: tr(c)[0].__setitem__('sigmoid', True)) is None              # 他の活性化もある（確率を使うかもしれない）
+assert mut(lambda c: tr(c)[0].__setitem__('_target_', 'AsDiscreted')) is None
+assert mut(lambda c: c.pop('postprocessing')) is None
+assert mut(lambda c: c['postprocessing'].__setitem__('transforms', '@x')) is None
+assert softmax_override_path(None) is None and softmax_override_path({}) is None
+print('ok')
+`, FIXTURE("wholeBody_inference.json"));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ok/);
+});
+
+test("PY_MEMORY root_cause: 実際の OOM の stderr から元の例外の行を取り出す。無関係な stderr では最後の行", () => {
+  const r = runMem(`
+real = sys.stdin.read()
+rc = root_cause(real)
+assert rc.startswith('torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 11.52 GiB'), rc
+# 今までの方式（最後の空でない行）では、原因が見えなかったこと（この検査が意味を持つ証拠）
+last = [l for l in real.splitlines() if l.strip()][-1]
+assert 'OutOfMemoryError' not in last, last
+assert root_cause('a\\n\\nboom\\n') == 'boom' and root_cause('') == 'unknown error' and root_cause(None) == 'unknown error'
+assert root_cause('MemoryError: x\\nlast').startswith('MemoryError')
+print('ok')
+`, FIXTURE("oom-stderr.txt"));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^ok/);
+});
+
+test("gpuMemoryHint / memoryModeNote: OOM のときだけ案内を足し、低メモリ方式のときだけ 1 行足す", () => {
+  assert.match(gpuMemoryHint("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 11.52 GiB"), /枚数を絞る/);
+  assert.match(gpuMemoryHint("RuntimeError: CUDA out of memory"), /A100/);
+  assert.equal(gpuMemoryHint("RuntimeError: bundle-run-failed: no-output"), "");
+  assert.equal(gpuMemoryHint(undefined), "");
+  assert.match(memoryModeNote, /softmax/);
+  assert.match(memoryModeNote, /ラベルは変わりません/);
 });
