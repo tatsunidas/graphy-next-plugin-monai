@@ -336,7 +336,76 @@ def mask_background(lab, vol_xyz, mode):
     return lab, int(bg.sum())
 `;
 
-export const PY = PY_ENV + PY_ORIENT + String.raw`
+/**
+ * GPU のメモリが足りない見込みのとき、推論の出力を確率にする softmax を省く判断（純粋な関数）。
+ * 出力は「チャンネル数 × 画像全体 × float32」で GPU に溜まり、softmax は同じ大きさをもう 1 つ作る（必要量が 2 倍）。
+ * argmax の前の softmax は単調なので、省いても最終ラベルは同じ。実測は README と GRAPHY-Next roadmap（第 901 回の調査）。
+ */
+export const PY_MEMORY = String.raw`
+GIB = 1024 ** 3
+OVERHEAD_BYTES = GIB   # モデル本体・作業領域の余白（150 枚の実測: 出力 5.04 GiB に対しピーク 10.5 GiB ＝ 2 倍 ＋ 0.4 GiB）
+FIT_RATIO = 0.9
+
+
+def pixdim_voxel_mm3(pixdim):
+    """解決後の pixdim（数値、または 3 つの数値の並び）→ 1 画素の体積（mm³）。それ以外は None"""
+    ok = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and 0 < v < float('inf')
+    if ok(pixdim):
+        vals = [float(pixdim)] * 3
+    elif isinstance(pixdim, (list, tuple)) and len(pixdim) == 3 and all(ok(v) for v in pixdim):
+        vals = [float(v) for v in pixdim]
+    else:
+        return None
+    return vals[0] * vals[1] * vals[2]
+
+
+def estimate_output_bytes(extent_mm3, pixdim, channels):
+    """推論の出力（チャンネル数 × 再標本化後の画素数 × float32）の大きさ。画素数は「入力の物理的な大きさ ÷ 1 画素の体積」
+    （軸の対応に依らない）。分からなければ None"""
+    vox = pixdim_voxel_mm3(pixdim)
+    if vox is None or not channels or channels < 1 or not (extent_mm3 > 0):
+        return None
+    return int(round(extent_mm3 / vox)) * int(channels) * 4
+
+
+def softmax_override_path(config):
+    """後処理が Activationsd(softmax) の直後に、同じ keys の AsDiscreted(argmax) を置いているときだけ、softmax を切る上書きの
+    キーを返す。並びが違う・他の活性化（sigmoid など）がある設定は None（確率を使うかもしれないので触らない）"""
+    pp = (config or {}).get('postprocessing')
+    tr = pp.get('transforms') if isinstance(pp, dict) else None
+    if not isinstance(tr, list):
+        return None
+    for i in range(len(tr) - 1):
+        a, b = tr[i], tr[i + 1]
+        if not (isinstance(a, dict) and isinstance(b, dict)):
+            continue
+        if a.get('_target_') != 'Activationsd' or a.get('softmax') is not True or a.get('sigmoid') or a.get('other'):
+            continue
+        if b.get('_target_') != 'AsDiscreted' or b.get('argmax') is not True or b.get('keys') != a.get('keys'):
+            continue
+        return 'postprocessing#transforms#%d#softmax' % i
+    return None
+
+
+def plan_memory(est_bytes, gpu_free_bytes):
+    """'default'（今までの方式）か 'no-softmax'。softmax あり = 見積り × 2 ＋ 余白が、GPU の空きの 9 割に収まらないときだけ後者。
+    見積りか空きが分からないときは 'default'（見積りの誤りで走る実行を変えない）"""
+    if est_bytes is None or gpu_free_bytes is None or gpu_free_bytes <= 0:
+        return 'default'
+    return 'default' if est_bytes * 2 + OVERHEAD_BYTES <= gpu_free_bytes * FIT_RATIO else 'no-softmax'
+
+
+def root_cause(stderr):
+    """子プロセスの stderr 全体から、失敗の元の例外の行を返す（メモリ不足を優先）。無ければ最後の空でない行。
+    末尾の「…を適用中に失敗」だけでは原因が見えない"""
+    lines = [l.strip() for l in (stderr or '').splitlines() if l.strip()]
+    for l in lines:
+        if 'OutOfMemoryError' in l or 'CUDA out of memory' in l or l.startswith('MemoryError'):
+            return l
+    return lines[-1] if lines else 'unknown error'
+`;
+
+export const PY = PY_ENV + PY_ORIENT + PY_MEMORY + String.raw`
 B = GRAPHY['bundle']
 OVR = GRAPHY.get('overrides') or {}
 ORIENT = GRAPHY.get('orientation')   # 入力の軸の並びを揃える Bundle だけ（INPUT_ORIENTATION）。無ければ元の格子のまま
@@ -745,6 +814,28 @@ logging_conf = os.path.join(root, 'configs', 'logging.conf')
 if os.path.isfile(logging_conf):
     kw['logging_file'] = logging_conf
 kw.update(OVR)
+# GPU のメモリが足りない見込みなら softmax を省く（argmax の前なので、ラベルは変わらない）。分からないことがあれば何もしない
+MEMORY_MODE = None
+try:
+    import torch
+    sm_path = softmax_override_path(cfg0)
+    pred_def = ((meta.get('network_data_format') or {}).get('outputs') or {}).get('pred') or {}
+    channels = pred_def.get('num_channels') or len(pred_def.get('channel_def') or {})
+    if torch.cuda.is_available() and sm_path and channels:
+        import copy
+        probe_mem = ConfigParser(copy.deepcopy(parser.get()))
+        probe_mem.update(pairs=dict(OVR))
+        pixdim = probe_mem.get_parsed_content('pixdim', instantiate=False)
+        extent = float(np.prod(np.asarray(vol.shape, dtype=float) * np.asarray(sp, dtype=float)))
+        est = estimate_output_bytes(extent, pixdim, channels)
+        free_b, total_b = torch.cuda.mem_get_info()
+        if plan_memory(est, free_b) == 'no-softmax':
+            kw[sm_path] = False
+            MEMORY_MODE = {'mode': 'no-softmax', 'estimatedGiB': round(est / GIB, 2), 'gpuFreeGiB': round(free_b / GIB, 2),
+                           'gpuTotalGiB': round(total_b / GIB, 2)}
+            print('memory: GPU のメモリが足りない見込み（出力の見積り %.2f GiB・空き %.2f GiB）。softmax を省きます' % (est / GIB, free_b / GIB), flush=True)
+except Exception as e:
+    print('memory-plan skipped:', type(e).__name__, str(e)[:200], flush=True)
 # 上書きが設定のどこに効くかを記録する（参照している設定の解決後の値）。結果の画面と検証でこの値を見る
 effective = {}
 effective_error = None
@@ -794,8 +885,7 @@ if proc.stdout:
 if proc.returncode != 0:
     tail = (proc.stderr or '').strip().splitlines()[-30:]
     print('\n'.join(tail), file=sys.stderr, flush=True)
-    last = next((l for l in reversed(tail) if l.strip()), 'unknown error')
-    raise RuntimeError('bundle-run-failed: ' + last[:500])
+    raise RuntimeError('bundle-run-failed: ' + root_cause(proc.stderr)[:500])
 run_peak = json.load(open(peak_path)) if os.path.isfile(peak_path) else {}
 stage('inferred', 0.85)
 
@@ -843,6 +933,7 @@ json.dump({
     'reoriented': ORIENT,
     'maskedBackground': masked_background if BG else None,
     'overrides': OVR,
+    'memoryMode': MEMORY_MODE,
     'prompt': {'labels': PROMPT.get('labels') or [], 'points': prompt_voxels},
     'bundleCodePatched': bundle_patched,
     'notInferredVoxels': not_inferred,
@@ -1026,6 +1117,15 @@ const REFUSALS = {
   "colab-not-configured": "このアプリには Colab に接続するための設定が入っていません。Jupyter Server を登録してください",
 };
 export const explain = (code) => (code && REFUSALS[code] ? `${REFUSALS[code]}（${code}）` : String(code));
+
+/** GPU のメモリ不足で落ちたとき、続けて出す案内（原因の行は errorValue にそのまま入っている）。 */
+export const gpuMemoryHint = (errorValue) =>
+  /OutOfMemoryError|CUDA out of memory/.test(String(errorValue ?? ""))
+    ? "。GPU のメモリが足りませんでした。画像の枚数を絞るか、より大きい GPU（Colab の A100 など）で試してください"
+    : "";
+
+/** 低メモリ方式（softmax を省いた）で処理したときに、完了の表示へ足す 1 行。 */
+export const memoryModeNote = "。GPU のメモリが足りない見込みだったため、確率への変換（softmax）を省いて処理しました（ラベルは変わりません）";
 
 // ---------------------------------------------------------------------------
 // 純関数（node --test で試す）
@@ -1812,7 +1912,7 @@ export async function activate(host) {
         return;
       }
       const notApplicable = /^not-applicable/.test(r.errorValue ?? "");
-      setStatus(notApplicable ? "このシリーズには使えないモデルです（推論はしていません）" : `失敗: ${r.errorName}: ${r.errorValue}`);
+      setStatus(notApplicable ? "このシリーズには使えないモデルです（推論はしていません）" : `失敗: ${r.errorName}: ${r.errorValue}${gpuMemoryHint(r.errorValue)}`);
       busy(false);
       return;
     }
@@ -1842,7 +1942,7 @@ export async function activate(host) {
         ? `ROI マネージャに読み込みました（${state.shown.segmentCount} ラベル）。保存するときは下の「SEG で保存」を押してください。`
         : `ROI マネージャに読み込めませんでした: ${state.shown.error}`;
     }
-    setStatus(`できました（${summary.stages?.done ?? "?"} 秒${summary.gpu ? "・" + summary.gpu.name + "・最大 " + summary.gpu.peakMiB + " MiB" : ""}）`);
+    setStatus(`できました（${summary.stages?.done ?? "?"} 秒${summary.gpu ? "・" + summary.gpu.name + "・最大 " + summary.gpu.peakMiB + " MiB" : ""}）${summary.memoryMode ? memoryModeNote : ""}`);
     busy(false);
   });
 

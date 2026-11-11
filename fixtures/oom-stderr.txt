@@ -1,0 +1,14 @@
+/usr/local/lib/python3.13/dist-packages/huggingface_hub/utils/_auth.py:138: UserWarning: 
+Error while fetching `HF_TOKEN` secret value from your vault: 'Requesting secret HF_TOKEN timed out. Secrets can only be fetched when running from the Colab UI.'.
+             ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/monai/transforms/post/array.py", line 131, in __call__
+    img_t = torch.softmax(img_t, dim=self.kwargs.get("dim", 0))
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 11.52 GiB. GPU 0 has a total capacity of 14.56 GiB of which 2.70 GiB is free. Including non-PyTorch memory, this process has 11.86 GiB memory in use. Of the allocated memory 11.70 GiB is allocated by PyTorch, and 37.47 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+
+The above exception was the direct cause of the following exception:
+    item.evaluate(globals={f"{self._vars}": self.resolved_content}) if run_eval else item
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/monai/bundle/config_item.py", line 376, in evaluate
+    raise RuntimeError(f"Failed to evaluate {self}") from e
+RuntimeError: Failed to evaluate ConfigExpression: 
+"$__local_refs['evaluator'].run()"
